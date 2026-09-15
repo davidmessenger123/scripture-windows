@@ -146,6 +146,12 @@ class AppController(QObject):
         if value:
             # Every open draws a fresh verse (fixed reference if configured).
             QTimer.singleShot(1, self.refresh)
+        else:
+            # The settings window lives inside the overlay, so closing the
+            # overlay also dismisses it.
+            if self._settings_open:
+                self._settings_open = False
+                self.settingsChanged.emit()
 
     overlayOpen = Property(bool, _overlay, _set_overlay, notify=overlayChanged)
 
@@ -164,6 +170,12 @@ class AppController(QObject):
 
     def _set_settings_open(self, value: bool) -> None:
         value = bool(value)
+        if value and not self._overlay_open:
+            # The settings window is a child of the overlay window and Qt
+            # cannot show a child while its parent is hidden. The tray
+            # "Settings..." action re-opens the overlay first so the
+            # settings window can appear.
+            self.overlayOpen = True
         if value == self._settings_open:
             return
         self._settings_open = value
