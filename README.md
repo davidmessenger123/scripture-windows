@@ -9,6 +9,23 @@ same reveal and scrim look — with no Omarchy or Quickshell dependency.
 
 Runs as a system-tray app.
 
+## Install for end users (no technical setup)
+
+You don't need Python or any tools. Download a prebuilt installer from the
+[Releases page](https://github.com/davidmessenger123/scripture-windows/releases):
+
+1. Open **`Scripture-Setup-<version>.exe`** and click **Next → Next → Install**.
+   It installs per-user (no admin password) and adds a Start-menu entry.
+2. If Windows shows **"Windows protected your PC"**, the app is unsigned (that
+   is normal for indie software): click **More info → Run anyway**.
+3. Look for the **gold star ** in the system tray, right-click it, and choose
+   **Open Scripture**.
+
+First-run tip: choose **Settings…** from the tray to optionally paste an ESV
+API key, set a fixed verse of the day, a daily auto-open time, or review your
+favorites. Without an ESV key it shows the World English Bible, which needs no
+signup.
+
 ## Features
 
 - **No-repeat rotation** over ~270 well-known, always-valid references (draws
@@ -42,13 +59,23 @@ pip install -r requirements.txt
 python -m scripture --smoke   # optional headless load test
 ```
 
-## Build a standalone .exe
+## Build the exe / installer (on Windows)
+
+From the repo root in PowerShell:
 
 ```powershell
-.\scripts\build.ps1
+.\scripts\build.ps1                      # portable onefile exe
+.\scripts\build-installer.ps1            # exe + dist\Scripture-Setup-<ver>.exe installer
 ```
 
-Produces `dist\Scripture.exe`.
+- `build.ps1` produces `dist\Scripture.exe` (works by itself, no install).
+- `build-installer.ps1` also compiles a per-user installer and needs
+  [Inno Setup 6](https://jrsoftware.org/isinfo.php) installed.
+- Both embed the star icon (`assets\app.ico`) and need Python 3.9+.
+
+**Release automation:** push a tag (`git tag v0.1.0 && git push --tags`) and the
+[GitHub Actions workflow](.github/workflows/build-release.yml) builds both files
+on a Windows runner and attaches them to a GitHub Release automatically.
 
 ## Controls
 
@@ -64,10 +91,11 @@ Produces `dist\Scripture.exe`.
 
 ## Data & settings
 
-- Settings (ESV key, translation, fixed verse, auto-open): platform app-data
-  `QSettings` (`%APPDATA%\davidjm\scripture\...` via the INI backend).
-- Favorites: `%APPDATA%\davidjm\scripture\favorites.json`, written atomically
-  (temp file + fsync + `os.replace`) exactly like the Omarchy plugin.
+- Settings (ESV key, translation, fixed verse, auto-open): `QSettings` under
+  `HKCU\Software\davidjm\scripture` on Windows (no registry editing needed —
+  it is only ever touched by the app's Settings panel).
+- Favorites: `%APPDATA%\Scripture\favorites.json`, written atomically (temp
+  file + fsync + `os.replace`) exactly like the Omarchy plugin.
 
 ## Development
 
