@@ -39,7 +39,7 @@ class SettingsView(QQuickView):
         self.setResizeMode(QQuickView.SizeRootObjectToView)
         qml_file = Path(__file__).parent / "qml" / "settings.qml"
         self.setSource(QUrl.fromLocalFile(str(qml_file)))
-        self.setFlags(Qt.WindowType.WindowStaysOnTopHint)
+        self.setFlags(Qt.WindowType.Window | Qt.WindowType.WindowStaysOnTopHint)
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self._controller.settingsOpen = False

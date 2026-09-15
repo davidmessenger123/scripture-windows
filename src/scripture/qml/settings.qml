@@ -219,6 +219,12 @@ Item {
         }
 
         Item { Layout.fillHeight: true }
+
+        Button {
+            text: "Close"
+            Layout.fillWidth: true
+            onClicked: App.settingsOpen = false
+        }
     }
 
     // Refresh the form from the app settings each time the window opens.
