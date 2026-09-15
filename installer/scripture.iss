@@ -25,12 +25,14 @@ UninstallDisplayIcon={app}\Scripture.exe
 UninstallDisplayName=Scripture
 Compression=lzma2
 SolidCompression=yes
-OutputDir=dist
+; Paths below are relative to this script file's directory (installer/), so
+; repo-root assets/ and dist/ are reached with a leading ..\.
+OutputDir=..\dist
 OutputBaseFilename=Scripture-Setup-{#AppVersion}
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
-SetupIconFile=assets\app.ico
+SetupIconFile=..\assets\app.ico
 WizardStyle=modern
 WizardSizePercent=115
 
@@ -39,7 +41,7 @@ Name: "desktopicon"; Description: "Create a &desktop icon"; Flags: unchecked
 Name: "startup"; Description: "&Start Scripture when I sign in (runs in the tray)"; GroupDescription: "Autostart:"
 
 [Files]
-Source: "dist\Scripture.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\dist\Scripture.exe"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\Scripture"; Filename: "{app}\Scripture.exe"; IconFilename: "{app}\Scripture.exe"
