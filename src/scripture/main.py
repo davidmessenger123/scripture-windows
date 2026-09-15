@@ -9,15 +9,42 @@ headless load test (`QT_QPA_PLATFORM=offscreen`).
 """
 
 import math
+import os
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QPointF, QTimer, QUrl, Qt
-from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPen, QPixmap, QPolygonF
+from PySide6.QtCore import QMetaObject, QPointF, QTimer, QUrl, Qt
+from PySide6.QtGui import QAction, QCloseEvent, QColor, QIcon, QPainter, QPen, QPixmap, QPolygonF
+from PySide6.QtQuick import QQuickView
 from PySide6.QtQml import QQmlApplicationEngine, qmlRegisterSingletonInstance
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
+from . import __version__
 from .controller import AppController
+from .updater import UpdateChecker
+
+
+class SettingsView(QQuickView):
+    """The settings dialog as an independent top-level window.
+
+    Visibility is driven from Python so the dialog is a real, editable window
+    that opens on its own — it is never hidden behind the full-screen overlay.
+    It shares the overlay's QQml engine so the `scripture` singleton resolves.
+    The window's X button reports the close back through `on_closed`.
+    """
+
+    def __init__(self, controller, engine, parent=None):
+        super().__init__(engine, None)
+        self._controller = controller
+        self.setResizeMode(QQuickView.SizeRootObjectToView)
+        qml_file = Path(__file__).parent / "qml" / "settings.qml"
+        self.setSource(QUrl.fromLocalFile(str(qml_file)))
+        self.setFlags(Qt.WindowType.WindowStaysOnTopHint)
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        self._controller.settingsOpen = False
+        event.accept()
+        super().closeEvent(event)
 
 
 def _make_icon() -> QIcon:
@@ -62,12 +89,45 @@ def main(argv=None) -> int:
     # Window content, so singletons are the only stable QML-facing name.
     qmlRegisterSingletonInstance(AppController, "ScriptureRT", 1, 0, "App", controller)
 
+    checker = UpdateChecker(__version__, app)
+    qmlRegisterSingletonInstance(UpdateChecker, "ScriptureRT", 1, 0, "Updater", checker)
+
     engine = QQmlApplicationEngine()
     qml_file = Path(__file__).parent / "qml" / "main.qml"
     engine.load(QUrl.fromLocalFile(str(qml_file)))
     if not engine.rootObjects():
         print("failed to load main.qml", file=sys.stderr)
         return 1
+
+    settings_view = SettingsView(controller, engine)
+    if settings_view.rootObject() is None:
+        print("failed to load settings.qml", file=sys.stderr)
+        return 1
+
+    def _sync_settings_view() -> None:
+        if controller.settingsOpen:
+            screen = settings_view.screen()
+            geo = screen.availableGeometry() if screen is not None else None
+            if geo is not None:
+                settings_view.setPosition(
+                    geo.center().x() - settings_view.width() // 2,
+                    geo.center().y() - settings_view.height() // 2,
+                )
+            settings_view.show()
+            settings_view.raise_()
+            root = settings_view.rootObject()
+            if root is not None:
+                QMetaObject.invokeMethod(root, "seedSettings")
+        else:
+            settings_view.hide()
+
+    controller.settingsChanged.connect(_sync_settings_view)
+
+    def _raise_settings_with_overlay() -> None:
+        if controller.settingsOpen:
+            settings_view.raise_()
+
+    controller.overlayChanged.connect(_raise_settings_with_overlay)
 
     if not smoke:
         tray = QSystemTrayIcon(_make_icon(), app)
@@ -91,6 +151,26 @@ def main(argv=None) -> int:
         menu.addAction(quit_action)
         tray.setContextMenu(menu)
         tray.setVisible(True)
+
+        ballooned = []
+        def _notify_update() -> None:
+            if checker.updateAvailable and checker.updateTag not in ballooned:
+                ballooned.append(checker.updateTag)
+                tray.showMessage(
+                    "Scripture update available",
+                    "Scripture %s is available." % checker.updateTag,
+                    QSystemTrayIcon.MessageIcon.Information,
+                    8000,
+                )
+
+        checker.updateChanged.connect(_notify_update)
+        tray.messageClicked.connect(checker.open)
+
+    updates_on = not smoke and (
+        getattr(sys, "frozen", False) or os.environ.get("SCRIPTURE_FORCE_UPDATE_CHECK") == "1"
+    )
+    if updates_on:
+        QTimer.singleShot(0, checker.check)
 
     if smoke:
         controller.overlayOpen = True

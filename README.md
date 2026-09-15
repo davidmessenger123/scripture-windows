@@ -26,6 +26,11 @@ API key, set a fixed verse of the day, a daily auto-open time, or review your
 favorites. Without an ESV key it shows the World English Bible, which needs no
 signup.
 
+Updates are checked automatically: when a newer release is available the tray
+shows a notification and the overlay adds an “Update available: vX.Y.Z — Get
+it” chip that opens the Releases page. The check is silent and skipped in
+development builds (set `SCRIPTURE_FORCE_UPDATE_CHECK=1` to enable it).
+
 ## Features
 
 - **No-repeat rotation** over ~270 well-known, always-valid references (draws
@@ -76,6 +81,8 @@ From the repo root in PowerShell:
 **Release automation:** push a tag (`git tag v0.1.0 && git push --tags`) and the
 [GitHub Actions workflow](.github/workflows/build-release.yml) builds both files
 on a Windows runner and attaches them to a GitHub Release automatically.
+Keep `src/scripture/__init__.py` (`__version__`) in step with the tag so the
+built-in update check never flags the app's own release.
 
 ## Controls
 
@@ -104,9 +111,11 @@ src/scripture/
   main.py          QApplication bootstrap, tray, QML engine
   controller.py    AppController QObject — state, fetch, reveal, favorites, auto-open
   fetcher.py       QNetworkAccessManager wrappers for api.esv.org and bible-api.com
+  updater.py       GitHub release update check (tray balloon + in-app chip)
   favorites.py     hardened atomic favorites store (port of favorites.py)
   references.py    curated deck + range/parse/rich-text helpers (port of Scripture.js)
-  qml/main.qml     overlay + settings UI (plain Qt Quick, no Omarchy imports)
+  qml/main.qml     overlay UI (plain Qt Quick, no Omarchy imports)
+  qml/settings.qml settings dialog (own QQuickView top-level window)
 ```
 
 The Omarchy plugin remains the upstream source of truth; when the two diverge,

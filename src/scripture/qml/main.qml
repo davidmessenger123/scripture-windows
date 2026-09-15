@@ -6,9 +6,8 @@ import ScriptureRT 1.0
 
 // Scripture for Windows — the Omarchy Scripture overlay re-implemented on plain
 // Qt Quick. The document root is the full-screen overlay Window itself; the
-// settings window is a second Window nested inside it, so both are children of
-// the root component (and settings is never shown without the overlay). All
-// behavior lives in the Python `app` controller.
+// settings dialog lives in settings.qml, hosted in its own QQuickView window.
+// All behavior lives in the Python `app` controller.
 
 Window {
     id: overlay
@@ -233,7 +232,30 @@ Window {
                         }
                     }
 
-                    // E — favorites chips (at most 8 + overflow note)
+                    // E — update available chip
+                    RowLayout {
+                        Layout.alignment: Qt.AlignHCenter
+                        spacing: 8
+                        objectName: "updateChip"
+                        visible: Updater.updateAvailable
+
+                        Text {
+                            text: "Update available: " + Updater.updateTag
+                            color: "#f5c542"
+                            font.family: "Segoe UI"
+                            font.pixelSize: 11
+                            font.bold: true
+                        }
+                        OverlayButton {
+                            text: "Get it"
+                            tip: "Open the release page in your browser"
+                            padX: 10
+                            fg: "white"
+                            onClicked: Updater.open()
+                        }
+                    }
+
+                    // F — favorites chips (at most 8 + overflow note)
                     RowLayout {
                         Layout.alignment: Qt.AlignHCenter
                         Layout.maximumWidth: keyCatcher.width - 96
@@ -351,236 +373,4 @@ Window {
                 }
             }
         }
-// ------------------------------------------------------------------ Settings window
-
-    Window {
-        id: settingsWin
-        objectName: "settingsWindow"
-        visible: App.settingsOpen
-        title: "Scripture Settings"
-        width: 440
-        height: 560
-        minimumWidth: 400
-        minimumHeight: 480
-        color: "#111418"
-
-        onVisibleChanged: if (visible) seedSettings()
-        onClosing: function (close) { close.accepted = true; App.settingsOpen = false }
-        Connections {
-            target: App
-            function onSettingsChanged() {
-                if (settingsWin.visible) settingsWin.seedSettings()
-            }
-        }
-
-        function seedSettings() {
-            keyField.text = App.settingsApiKey
-            fixedField.text = App.settingsFixedReference
-            autoField.text = App.settingsAutoOpenAt
-            selTranslation = App.settingsTranslation
-        }
-        property string selTranslation: "ESV"
-
-        ColumnLayout {
-            anchors.fill: parent
-            anchors.margins: 18
-            spacing: 12
-
-            Text {
-                text: "ESV API KEY"
-                color: "#faa968"
-                font.family: "Segoe UI"
-                font.pixelSize: 10
-                font.bold: true
-                font.letterSpacing: 2
-            }
-
-            Text {
-                text: "A free api.esv.org key enables the English Standard Version. " +
-                      "Without one the ESV falls back to the World English Bible."
-                color: "#9aa0a6"
-                font.family: "Segoe UI"
-                font.pixelSize: 11
-                wrapMode: Text.Wrap
-                Layout.fillWidth: true
-            }
-
-            TextField {
-                id: keyField
-                Layout.fillWidth: true
-                placeholderText: "Paste your ESV API key (optional)"
-                echoMode: TextInput.Password
-            }
-
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.topMargin: 4
-                height: 1
-                color: "#2a2f35"
-            }
-
-            Text {
-                text: "VERSE & SCHEDULE"
-                color: "#faa968"
-                font.family: "Segoe UI"
-                font.pixelSize: 10
-                font.bold: true
-                font.letterSpacing: 2
-            }
-
-            RowLayout {
-                spacing: 6
-
-                Text {
-                    text: "Translation"
-                    color: "#9aa0a6"
-                    font.family: "Segoe UI"
-                    font.pixelSize: 11
-                    Layout.fillWidth: true
-                }
-
-                Button { text: "ESV"; checkable: true; checked: settingsWin.selTranslation === "ESV"; onClicked: settingsWin.selTranslation = "ESV" }
-                Button { text: "WEB"; checkable: true; checked: settingsWin.selTranslation === "WEB"; onClicked: settingsWin.selTranslation = "WEB" }
-                Button { text: "KJV"; checkable: true; checked: settingsWin.selTranslation === "KJV"; onClicked: settingsWin.selTranslation = "KJV" }
-            }
-
-            RowLayout {
-                spacing: 8
-
-                Text {
-                    text: "Fixed verse"
-                    color: "#9aa0a6"
-                    font.family: "Segoe UI"
-                    font.pixelSize: 11
-                    Layout.fillWidth: true
-                }
-
-                TextField {
-                    id: fixedField
-                    Layout.preferredWidth: 150
-                    placeholderText: "e.g. John 3:16"
-                }
-            }
-
-            RowLayout {
-                spacing: 8
-
-                Text {
-                    text: "Auto-open (HH:MM)"
-                    color: "#9aa0a6"
-                    font.family: "Segoe UI"
-                    font.pixelSize: 11
-                    Layout.fillWidth: true
-                }
-
-                TextField {
-                    id: autoField
-                    Layout.preferredWidth: 120
-                    placeholderText: "07:30"
-                    maximumLength: 5
-                }
-            }
-
-            Button {
-                text: "Apply"
-                Layout.fillWidth: true
-                onClicked: App.save_settings(keyField.text, settingsWin.selTranslation, fixedField.text, autoField.text)
-            }
-
-            Text {
-                visible: App.settingsNotice !== ""
-                text: App.settingsNotice
-                color: App.settingsNoticeError ? "#ff6b6b" : "#9aa0a6"
-                font.family: "Segoe UI"
-                font.pixelSize: 11
-                wrapMode: Text.Wrap
-                Layout.fillWidth: true
-            }
-
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.topMargin: 4
-                height: 1
-                color: "#2a2f35"
-            }
-
-            Text {
-                text: "FAVORITES"
-                color: "#faa968"
-                font.family: "Segoe UI"
-                font.pixelSize: 10
-                font.bold: true
-                font.letterSpacing: 2
-            }
-
-            Text {
-                visible: App.favorites.length === 0
-                text: "No favorites yet — tap ☆ on any verse to save it."
-                color: "#9aa0a6"
-                font.family: "Segoe UI"
-                font.pixelSize: 11
-                wrapMode: Text.Wrap
-                Layout.fillWidth: true
-            }
-
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: Math.min(App.favorites.length * 34, 170)
-                visible: App.favorites.length > 0
-                color: "transparent"
-                clip: true
-
-                Flickable {
-                    anchors.fill: parent
-                    contentHeight: favCol.implicitHeight
-                    flickableDirection: Flickable.VerticalFlick
-                    boundsBehavior: Flickable.StopAtBounds
-
-                    ColumnLayout {
-                        id: favCol
-                        width: parent.width
-                        spacing: 0
-
-                        Repeater {
-                            model: App.favorites
-
-                            RowLayout {
-                                Layout.fillWidth: true
-                                Layout.preferredHeight: 34
-                                spacing: 6
-
-                                Text {
-                                    Layout.fillWidth: true
-                                    text: modelData
-                                    color: "#e8eaed"
-                                    font.family: "Segoe UI"
-                                    font.pixelSize: 11
-                                    elide: Text.ElideRight
-                                }
-
-                                Button {
-                                    text: "▶"
-                                    ToolTip.visible: hovered
-                                    ToolTip.text: "Load " + modelData
-                                    onClicked: {
-                                        App.settingsOpen = false
-                                        App.load_reference(modelData)
-                                    }
-                                }
-
-                                Button {
-                                    text: "×"
-                                    ToolTip.visible: hovered
-                                    ToolTip.text: "Remove " + modelData + " from favorites"
-                                    onClicked: App.remove_favorite(modelData)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            Item { Layout.fillHeight: true }
-        }
-    }
 }
