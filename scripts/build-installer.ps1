@@ -37,6 +37,7 @@ python -m PyInstaller `
     --windowed `
     --icon assets\app.ico `
     --add-data "src\scripture\qml;scripture\qml" `
+    --paths src `
     --hidden-import PySide6.QtQml `
     src\scripture\__main__.py
 
