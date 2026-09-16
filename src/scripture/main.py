@@ -105,6 +105,16 @@ def _engine_errors(engine) -> str:
     return ":\n" + "\n".join(collected) if collected else ""
 
 
+def _qml_import_probe(engine, qml_file) -> str:
+    """Describe the frozen bundle state around the QML load, for a startup log."""
+    lines = []
+    if getattr(sys, "frozen", False):
+        lines.append("frozen: True")
+    lines.append(f"qml_file: {qml_file} exists={qml_file.exists()}")
+    lines.append("importPaths: " + ", ".join(engine.importPathList()) or "(none)")
+    return "\n".join(lines)
+
+
 def main(argv=None) -> int:
     try:
         return _run(argv)
@@ -143,7 +153,11 @@ def _run(argv=None) -> int:
     qml_file = Path(__file__).parent / "qml" / "main.qml"
     engine.load(QUrl.fromLocalFile(str(qml_file)))
     if not engine.rootObjects():
-        _startup_log("failed to load main.qml" + _engine_errors(engine))
+        _startup_log(
+            "failed to load main.qml"
+            + _engine_errors(engine)
+            + "\n" + _qml_import_probe(engine, qml_file)
+        )
         return 1
 
     settings_view = SettingsView(controller, engine)
