@@ -10,9 +10,10 @@ headless load test (`QT_QPA_PLATFORM=offscreen`).
 
 import os
 import sys
+import traceback
 from pathlib import Path
 
-from PySide6.QtCore import QMetaObject, QTimer, QUrl, Qt
+from PySide6.QtCore import QMetaObject, QStandardPaths, QTimer, QUrl, Qt
 from PySide6.QtGui import QAction, QCloseEvent, QColor, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtQuick import QQuickView
 from PySide6.QtQml import QQmlApplicationEngine, qmlRegisterSingletonInstance
@@ -21,6 +22,29 @@ from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 from . import __version__
 from .controller import AppController
 from .updater import UpdateChecker
+
+
+def _startup_log(message: str) -> None:
+    """Record startup failures somewhere visible even without a console.
+
+    The frozen (windowed) Windows exe has no stderr, so a QML load failure or
+    an early exception would otherwise look exactly like the reported bug: the
+    onefile parent+child enter Task Manager and then vanish silently. Log to
+    the same AppData dir the rest of the app uses (C:/Users/<u>/AppData/Roaming/
+    davidjm/scripture/startup-error.log) so a failed exe leaves a trail.
+    """
+    if not getattr(sys, "frozen", False):
+        print(message, file=sys.stderr)
+        return
+    try:
+        base = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation)
+        if base:
+            path = Path(base) / "startup-error.log"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(message.rstrip() + "\n")
+    except OSError:
+        pass
 
 
 class SettingsView(QQuickView):
@@ -65,7 +89,25 @@ def _make_icon() -> QIcon:
     return QIcon(pm)
 
 
+def _engine_errors(engine) -> str:
+    """Collect the QQmlEngine's error strings for a diagnostic log line."""
+    errors = []
+    for error in engine.errors():
+        errors.append(str(error.toString()))
+    return ":\n" + "\n".join(errors) if errors else ""
+
+
 def main(argv=None) -> int:
+    try:
+        return _run(argv)
+    except Exception:
+        _startup_log(
+            "Unhandled exception in main():\n" + traceback.format_exc()
+        )
+        raise
+
+
+def _run(argv=None) -> int:
     argv = list(argv if argv is not None else sys.argv[1:])
     smoke = "--smoke" in argv
     app_args = [a for a in sys.argv[:1] + [x for x in argv if x != "--smoke"]]
@@ -91,12 +133,12 @@ def main(argv=None) -> int:
     qml_file = Path(__file__).parent / "qml" / "main.qml"
     engine.load(QUrl.fromLocalFile(str(qml_file)))
     if not engine.rootObjects():
-        print("failed to load main.qml", file=sys.stderr)
+        _startup_log("failed to load main.qml" + _engine_errors(engine))
         return 1
 
     settings_view = SettingsView(controller, engine)
     if settings_view.rootObject() is None:
-        print("failed to load settings.qml", file=sys.stderr)
+        _startup_log("failed to load settings.qml" + _engine_errors(engine))
         return 1
 
     def _sync_settings_view() -> None:

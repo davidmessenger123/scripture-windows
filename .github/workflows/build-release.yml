@@ -35,6 +35,35 @@ jobs:
         shell: pwsh
         run: python -m PyInstaller --noconfirm --clean Scripture.spec
 
+      - name: Smoke test the frozen exe (not just source)
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          $out = & dist\Scripture.exe --smoke 2>&1
+          $code = $LASTEXITCODE
+          $out
+          if ($code -ne 0) {
+            $log = Join-Path $env:LOCALAPPDATA 'davidjm\scripture\startup-error.log'
+            if (Test-Path $log) { Get-Content $log | Write-Error }
+            throw "frozen exe smoke test failed with exit code $code"
+          }
+
+      - name: Boot check (update check path, 12 s)
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+          SCRIPTURE_FORCE_UPDATE_CHECK: "1"
+        run: |
+          $p = Start-Process -FilePath dist\Scripture.exe -PassThru -NoNewWindow
+          Start-Sleep -Seconds 12
+          if ($p.HasExited) {
+            $log = Join-Path $env:LOCALAPPDATA 'davidjm\scripture\startup-error.log'
+            if (Test-Path $log) { Get-Content $log | Write-Error }
+            throw "Scripture.exe exited on its own after startup (exit code $($p.ExitCode))"
+          }
+          Stop-Process -Id $p.Id
+
       - name: Install Inno Setup
         shell: pwsh
         run: choco install innosetup -y --no-progress
