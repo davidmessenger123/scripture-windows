@@ -48,13 +48,13 @@ jobs:
           }
           if (-not $p.HasExited) {
             Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
-            $log = Join-Path (Join-Path $env:LOCALAPPDATA 'davidjm') 'scripture\startup-error.log'
+            $log = Join-Path (Join-Path $env:APPDATA 'davidjm') 'scripture\startup-error.log'
             if (Test-Path $log) { Get-Content $log | Write-Error }
             throw "frozen exe smoke test did not exit within 20s (windowed traceback dialog? crash?)"
           }
           $code = $p.ExitCode
           if ($code -ne 0) {
-            $log = Join-Path (Join-Path $env:LOCALAPPDATA 'davidjm') 'scripture\startup-error.log'
+            $log = Join-Path (Join-Path $env:APPDATA 'davidjm') 'scripture\startup-error.log'
             if (Test-Path $log) { Get-Content $log | Write-Error }
             throw "frozen exe smoke test failed with exit code $code"
           }
@@ -67,7 +67,7 @@ jobs:
         run: |
           $p = Start-Process -FilePath dist\Scripture.exe -PassThru
           Start-Sleep -Seconds 12
-          $log = Join-Path (Join-Path $env:LOCALAPPDATA 'davidjm') 'scripture\startup-error.log'
+          $log = Join-Path (Join-Path $env:APPDATA 'davidjm') 'scripture\startup-error.log'
           if ($p.HasExited) {
             if (Test-Path $log) { Get-Content $log | Write-Error }
             throw "Scripture.exe exited on its own after startup (exit code $($p.ExitCode))"

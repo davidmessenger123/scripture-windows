@@ -104,6 +104,8 @@ def main(argv=None) -> int:
         _startup_log(
             "Unhandled exception in main():\n" + traceback.format_exc()
         )
+        if getattr(sys, "frozen", False):
+            return 1
         raise
 
 
