@@ -31,10 +31,6 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: python -m scripture --smoke
 
-      - name: Install UPX
-        shell: pwsh
-        run: choco install upx -y --no-progress
-
       - name: Build portable onefile exe
         shell: pwsh
         run: python -m PyInstaller --noconfirm --clean Scripture.spec

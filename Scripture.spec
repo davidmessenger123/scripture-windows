@@ -9,6 +9,10 @@
 # The bundle is kept small by packaging/pyinstaller/hook-PySide6.QtQml.py,
 # which allowlists the QML modules so unused Qt machinery (WebEngine, QtQuick3D,
 # Charts, etc.) and its shared libraries are never collected.
+#
+# UPX is deliberately left OFF: PyInstaller deprecates it, and UPX-packed
+# binaries trip Windows Defender / SmartScreen false positives, so a UPX build
+# silently fails to start on end-user machines.
 
 import os
 
@@ -74,7 +78,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,
