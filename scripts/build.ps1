@@ -11,16 +11,6 @@ if (-not (Test-Path "assets\app.ico")) {
     python scripts\make_icon.py
 }
 
-python -m PyInstaller `
-    --noconfirm `
-    --clean `
-    --name Scripture `
-    --onefile `
-    --windowed `
-    --icon assets\app.ico `
-    --add-data "src\scripture\qml;scripture\qml" `
-    --paths src `
-    --hidden-import PySide6.QtQml `
-    src\scripture\__main__.py
+python -m PyInstaller --noconfirm --clean Scripture.spec
 
 Write-Host "Built dist\Scripture.exe"

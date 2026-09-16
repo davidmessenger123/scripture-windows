@@ -31,16 +31,13 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: python -m scripture --smoke
 
+      - name: Install UPX
+        shell: pwsh
+        run: choco install upx -y --no-progress
+
       - name: Build portable onefile exe
         shell: pwsh
-        run: |
-          python -m PyInstaller --noconfirm --clean `
-            --name Scripture --onefile --windowed `
-            --icon assets\app.ico `
-            --add-data "src\scripture\qml;scripture\qml" `
-            --paths src `
-            --hidden-import PySide6.QtQml `
-            src\scripture\__main__.py
+        run: python -m PyInstaller --noconfirm --clean Scripture.spec
 
       - name: Install Inno Setup
         shell: pwsh

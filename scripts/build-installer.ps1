@@ -29,17 +29,7 @@ if (-not (Test-Path "assets\app.ico")) {
 
 # -- Step 3: build onefile exe -------------------------------------------
 Write-Host "`n[3/4] Building dist\Scripture.exe (PyInstaller)..."
-python -m PyInstaller `
-    --noconfirm `
-    --clean `
-    --name Scripture `
-    --onefile `
-    --windowed `
-    --icon assets\app.ico `
-    --add-data "src\scripture\qml;scripture\qml" `
-    --paths src `
-    --hidden-import PySide6.QtQml `
-    src\scripture\__main__.py
+python -m PyInstaller --noconfirm --clean Scripture.spec
 
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
 Write-Host "  dist\Scripture.exe built."
