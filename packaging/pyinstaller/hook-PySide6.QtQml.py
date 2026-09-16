@@ -11,14 +11,15 @@
 #
 # The app imports only QtQuick, QtQuick.Controls and QtQuick.Layouts, so we keep
 # exactly that family: QtQml plus the QtQuick core, Templates, Controls (root +
-# Basic and Fusion styles, which are what the app resolves to at runtime — the
-# platform "Windows" style does not ship in the PySide6 wheel — plus the shared
-# internal impl), Dialogs, Layouts, Window and a few small helper modules.
+# Basic and Fusion styles only — the app pins QT_QUICK_CONTROLS_STYLE=Basic at
+# startup; every other style, including the platform-native "Windows" style, is
+# dropped to avoid its QtQuick.NativeStyle dependency), Dialogs, Layouts, Window
+# and a few small helper modules.
 # Everything else is dropped: the bigger optional Control styles (Material,
-# Imagine, Universal, FluentWinUI3) and the standalone VirtualKeyboard, Pdf,
-# Scene3D, VectorImage and Effects-adjacent modules, along with the Qt shared
-# libraries they would otherwise drag in. The Basic style was what the app
-# already rendered with, so the look is unchanged.
+# Imagine, Universal, FluentWinUI3, Windows) and the standalone VirtualKeyboard,
+# Pdf, Scene3D, VectorImage and Effects-adjacent modules, along with the Qt
+# shared libraries they would otherwise drag in. Basic is the style the app
+# renders with on every platform, so the look is unchanged.
 #
 # This works because PyInstaller allows only one hook per module, ordered by
 # priority; user hooks (priority 1000) replace the built-in one (priority -2000).
@@ -48,7 +49,9 @@ _QML_MODULE_LEAVES_UNDER_QTQUICK = {
     "Window",
 }
 
-_QML_CONTROLS_DROP = {"designer", "FluentWinUI3", "Imagine", "Material", "Universal"}
+_QML_CONTROLS_DROP = {
+    "designer", "FluentWinUI3", "Imagine", "Material", "Universal", "Windows"
+}
 
 
 def _keep_qml(candidates):

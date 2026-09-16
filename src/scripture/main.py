@@ -174,6 +174,13 @@ def _run(argv=None) -> int:
     if smoke and "offscreen" not in " ".join(app_args):
         pass  # platform is chosen via QT_QPA_PLATFORM env by the caller
 
+    # Pin Qt Quick Controls to the "Basic" style. On Windows the platform
+    # default is a native style that imports QtQuick.NativeStyle — a module the
+    # PyInstaller bundle deliberately ships without (see the QtQml hook), so
+    # letting it resolve would crash the frozen exe. Basic is style-agnostic and
+    # is what every platform rendered before.
+    os.environ.setdefault("QT_QUICK_CONTROLS_STYLE", "Basic")
+
     app = QApplication(app_args)
     app.setApplicationName("Scripture")
     app.setOrganizationName("davidjm")
