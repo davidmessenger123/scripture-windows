@@ -27,9 +27,12 @@ favorites. Without an ESV key it shows the World English Bible, which needs no
 signup.
 
 Updates are checked automatically: when a newer release is available the tray
-shows a notification and the overlay adds an “Update available: vX.Y.Z — Get
-it” chip that opens the Releases page. The check is silent and skipped in
-development builds (set `SCRIPTURE_FORCE_UPDATE_CHECK=1` to enable it).
+shows a notification and the overlay adds an “Update available: vX.Y.Z —
+Download” chip. Clicking either downloads the new version and Scripture
+restarts itself automatically (the running installer-less exe is swapped in
+place) — no need to reinstall from the Releases page. The chip also keeps an
+“Open browser” fallback. The check is silent and skipped in development builds
+(set `SCRIPTURE_FORCE_UPDATE_CHECK=1` to enable it).
 
 ## Features
 

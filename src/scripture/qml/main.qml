@@ -58,6 +58,41 @@ Window {
         hoverEnabled: true
     }
 
+    // Decorative Latin cross drawn from rectangles, not text: the vertical stem
+    // and horizontal beam share a common horizontal center, so they can never
+    // drift apart the way monospace block characters can.
+    component CrossMark: Item {
+        id: mark
+        property color cr: Qt.rgba(1, 1, 1, 0.55)
+        property real cellW: 25
+        property real cellH: 42
+
+        width: mark.beamW
+        height: mark.stemH
+
+        readonly property real beamW: 11 * cellW
+        readonly property real stemW: 3 * cellW
+        readonly property real beamH: 2 * cellH
+        readonly property real stemH: 13 * cellH
+        readonly property real beamTop: 3 * cellH
+
+        Rectangle {
+            anchors.horizontalCenter: mark.horizontalCenter
+            width: mark.stemW
+            height: mark.stemH
+            color: mark.cr
+            radius: mark.stemW / 3
+        }
+        Rectangle {
+            anchors.horizontalCenter: mark.horizontalCenter
+            width: mark.beamW
+            height: mark.beamH
+            y: mark.beamTop
+            color: mark.cr
+            radius: mark.beamH / 4
+        }
+    }
+
     // ------------------------------------------------------------------ Overlay content
 
     Item {
@@ -81,49 +116,24 @@ Window {
                 onClicked: App.close_overlay()
             }
 
-            // Decorative block crosses, fixed to the screen edges.
-            Text {
+            // Decorative Latin crosses, fixed to the screen edges.
+            CrossMark {
                 id: crossLeft
                 anchors.left: parent.left
                 anchors.leftMargin: 64
                 anchors.verticalCenter: parent.verticalCenter
-                text: [
-                    "      ███",
-                    "      ███",
-                    "      ███",
-                    "  ███████████",
-                    "  ███████████",
-                    "      ███",
-                    "      ███",
-                    "      ███",
-                    "      ███",
-                    "      ███",
-                    "      ███",
-                    "      ███",
-                    "      ███"
-                ].join("\n")
-                font.family: "monospace"
-                font.pixelSize: 42
-                lineHeight: 1.0
-                color: Qt.rgba(1, 1, 1, 0.55)
                 opacity: App.loading ? 0.45 : 1
                 Behavior on opacity { NumberAnimation { duration: 300; easing.type: Easing.OutCubic } }
-                textFormat: Text.PlainText
             }
 
-            Text {
+            CrossMark {
                 id: crossRight
                 anchors.right: parent.right
                 anchors.rightMargin: 64
                 anchors.verticalCenter: parent.verticalCenter
-                text: crossLeft.text
-                font.family: "monospace"
-                font.pixelSize: 42
-                lineHeight: 1.0
-                color: Qt.rgba(1, 1, 1, 0.55)
+                cr: Qt.rgba(1, 1, 1, 0.55)
                 opacity: App.loading ? 0.45 : 1
                 Behavior on opacity { NumberAnimation { duration: 300; easing.type: Easing.OutCubic } }
-                textFormat: Text.PlainText
             }
 
             // Content cluster, auto-scaled to fit the screen.
@@ -232,25 +242,52 @@ Window {
                         }
                     }
 
-                    // E — update available chip
+                    // E — update chip (self-update: download, then restart to apply)
                     RowLayout {
                         Layout.alignment: Qt.AlignHCenter
                         spacing: 8
                         objectName: "updateChip"
-                        visible: Updater.updateAvailable
+                        visible: Updater.updateAvailable || Updater.downloading || Updater.updateApplied
+                                    || Updater.updateError !== ""
 
-                        Text {
-                            text: "Update available: " + Updater.updateTag
-                            color: "#f5c542"
-                            font.family: "Segoe UI"
-                            font.pixelSize: 11
-                            font.bold: true
+                        ColumnLayout {
+                            spacing: 3
+                            Text {
+                                Layout.alignment: Qt.AlignHCenter
+                                text: Updater.downloading ? "Downloading update " + Math.round(Updater.updateProgress * 100) + "%" :
+                                      Updater.updateApplied ? "Applying update — Scripture will restart\u2026" :
+                                      Updater.updateError !== "" ? "Update failed" :
+                                      "Update available: " + Updater.updateTag
+                                color: Updater.updateError !== "" ? "#ff6b6b" : "#f5c542"
+                                font.family: "Segoe UI"
+                                font.pixelSize: 11
+                                font.bold: true
+                            }
+                            Text {
+                                Layout.alignment: Qt.AlignHCenter
+                                visible: Updater.updateError !== ""
+                                text: Updater.updateError
+                                color: Qt.rgba(1, 1, 1, 0.6)
+                                font.family: "Segoe UI"
+                                font.pixelSize: 10
+                            }
                         }
                         OverlayButton {
-                            text: "Get it"
-                            tip: "Open the release page in your browser"
+                            text: Updater.downloading ? "Downloading\u2026" :
+                                  Updater.updateApplied ? "Restarting\u2026" :
+                                  Updater.updateError !== "" ? "Retry" : "Download"
+                            tip: Updater.updateError !== "" ? "Retry the self-update" : "Download and install the update automatically"
                             padX: 10
                             fg: "white"
+                            enabled: !Updater.downloading && !Updater.updateApplied
+                            onClicked: Updater.download()
+                        }
+                        OverlayButton {
+                            text: "Open browser"
+                            tip: "Open the release page in your browser"
+                            padX: 10
+                            fg: Qt.rgba(1, 1, 1, 0.55)
+                            enabled: !Updater.downloading
                             onClicked: Updater.open()
                         }
                     }

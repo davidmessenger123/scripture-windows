@@ -153,19 +153,31 @@ def main(argv=None) -> int:
                 ballooned.append(checker.updateTag)
                 tray.showMessage(
                     "Scripture update available",
-                    "Scripture %s is available." % checker.updateTag,
+                    "Scripture %s is available. Click to update automatically." % checker.updateTag,
                     QSystemTrayIcon.MessageIcon.Information,
                     8000,
                 )
 
         checker.updateChanged.connect(_notify_update)
-        tray.messageClicked.connect(checker.open)
+        tray.messageClicked.connect(checker.download)
 
     updates_on = not smoke and (
         getattr(sys, "frozen", False) or os.environ.get("SCRIPTURE_FORCE_UPDATE_CHECK") == "1"
     )
     if updates_on:
         QTimer.singleShot(0, checker.check)
+
+    def _maybe_apply_update() -> None:
+        if (
+            not checker.downloading
+            and checker.updateProgress >= 1.0
+            and checker.updateError == ""
+            and not checker.updateApplied
+        ):
+            QTimer.singleShot(400, checker.apply)
+
+    checker.downloadingChanged.connect(_maybe_apply_update)
+    checker.quitRequested.connect(app.quit)
 
     if smoke:
         controller.overlayOpen = True
