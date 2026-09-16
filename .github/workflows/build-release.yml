@@ -40,9 +40,8 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          $out = & dist\Scripture.exe --smoke 2>&1
-          $code = $LASTEXITCODE
-          $out
+          $p = Start-Process -FilePath dist\Scripture.exe -ArgumentList '--smoke' -PassThru -Wait
+          $code = $p.ExitCode
           if ($code -ne 0) {
             $log = Join-Path $env:LOCALAPPDATA 'davidjm\scripture\startup-error.log'
             if (Test-Path $log) { Get-Content $log | Write-Error }
