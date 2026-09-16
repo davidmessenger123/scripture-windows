@@ -40,6 +40,11 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
+          function Dump-Log([string]$path) {
+            Write-Host "===== startup-error.log ====="
+            Write-Host (Get-Content -LiteralPath $path -Raw)
+            Write-Host "===== end ====="
+          }
           $p = Start-Process -FilePath dist\Scripture.exe -ArgumentList '--smoke' -PassThru
           $deadline = (Get-Date).AddSeconds(20)
           while (-not $p.HasExited -and (Get-Date) -lt $deadline) {
@@ -49,13 +54,13 @@ jobs:
           if (-not $p.HasExited) {
             Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
             $log = Join-Path (Join-Path $env:APPDATA 'davidjm') 'scripture\startup-error.log'
-            if (Test-Path $log) { Get-Content $log | Write-Error }
+            if (Test-Path $log) { Dump-Log $log }
             throw "frozen exe smoke test did not exit within 20s (windowed traceback dialog? crash?)"
           }
           $code = $p.ExitCode
           if ($code -ne 0) {
             $log = Join-Path (Join-Path $env:APPDATA 'davidjm') 'scripture\startup-error.log'
-            if (Test-Path $log) { Get-Content $log | Write-Error }
+            if (Test-Path $log) { Dump-Log $log }
             throw "frozen exe smoke test failed with exit code $code"
           }
 
@@ -65,17 +70,22 @@ jobs:
           QT_QPA_PLATFORM: offscreen
           SCRIPTURE_FORCE_UPDATE_CHECK: "1"
         run: |
+          function Dump-Log([string]$path) {
+            Write-Host "===== startup-error.log ====="
+            Write-Host (Get-Content -LiteralPath $path -Raw)
+            Write-Host "===== end ====="
+          }
           $p = Start-Process -FilePath dist\Scripture.exe -PassThru
           Start-Sleep -Seconds 12
           $log = Join-Path (Join-Path $env:APPDATA 'davidjm') 'scripture\startup-error.log'
           if ($p.HasExited) {
-            if (Test-Path $log) { Get-Content $log | Write-Error }
+            if (Test-Path $log) { Dump-Log $log }
             throw "Scripture.exe exited on its own after startup (exit code $($p.ExitCode))"
           }
           if (Test-Path $log) {
             $err = Get-Content $log -Raw
             if ($err -and (Get-Item $log).LastWriteTime -gt (Get-Date).AddSeconds(-15)) {
-              Get-Content $log | Write-Error
+              Dump-Log $log
               Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
               throw "startup-error.log was written during the boot check"
             }
