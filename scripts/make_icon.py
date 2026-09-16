@@ -27,7 +27,7 @@ def draw_cross(painter: QPainter, size: float) -> None:
         size * 0.43, size * 0.15, size * 0.14, size * 0.62, r, r
     )  # vertical beam
     painter.drawRoundedRect(
-        size * 0.375, size * 0.30, size * 0.25, size * 0.14, r, r
+        size * 0.32, size * 0.30, size * 0.36, size * 0.14, r, r
     )  # horizontal beam
 
 

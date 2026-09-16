@@ -60,7 +60,7 @@ def _make_icon() -> QIcon:
     painter.setBrush(QColor("#f5c542"))
     r = size / 22
     painter.drawRoundedRect(size * 0.43, size * 0.15, size * 0.14, size * 0.62, r, r)
-    painter.drawRoundedRect(size * 0.375, size * 0.30, size * 0.25, size * 0.14, r, r)
+    painter.drawRoundedRect(size * 0.32, size * 0.30, size * 0.36, size * 0.14, r, r)
     painter.end()
     return QIcon(pm)
 
