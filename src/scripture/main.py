@@ -89,35 +89,35 @@ def _make_icon() -> QIcon:
     return QIcon(pm)
 
 
-def _engine_errors(engine) -> str:
-    """Collect the QQmlEngine's error strings for a diagnostic log line."""
-    collected = []
-    for attr in ("errors", "warnings"):
-        getter = getattr(engine, attr, None)
-        if getter is None:
-            continue
-        try:
-            qml_errors = getter()
-        except Exception:
-            continue
-        for qerr in qml_errors or []:
-            collected.append(str(qerr.toString()))
-    return ":\n" + "\n".join(collected) if collected else ""
+def _engine_errors_capture(engine):
+    """Connect to the engine's `warnings` signal and return a reader callable."""
+    captured = []
+
+    def _on_warnings(warnings):
+        for w in warnings:
+            try:
+                captured.append(str(w.toString()))
+            except Exception:
+                captured.append(repr(w))
+
+    try:
+        engine.warnings.connect(_on_warnings)
+    except Exception:
+        pass
+    return lambda: ":\n" + "\n".join(captured) if captured else ""
 
 
 def _qml_message_capture(ctx=None):
-    """Return a list that a Qt message handler appends QML errors to."""
+    """Return a list that a Qt message handler appends all messages to."""
     buf = []
 
     def handler(mode, context, message):
-        if context is None:
-            return
-        cat = context.category or ""
-        msg = str(message or "")
-        if cat.startswith("qml") or "QQmlEngine" in msg or "incorrect module" in msg:
-            buf.append(msg)
-        elif cat and "qml" in cat.lower() and msg:
-            buf.append(msg)
+        cat = context.category if context else "(none)"
+        if context is not None and context.file:
+            loc = f"{context.file}:{context.line}"
+        else:
+            loc = "-"
+        buf.append(f"[{mode}] {cat} {loc}: {message}")
 
     from PySide6.QtCore import qInstallMessageHandler
 
@@ -145,7 +145,13 @@ def _qml_import_probe(engine, qml_file) -> str:
     if getattr(sys, "frozen", False):
         lines.append("frozen: True")
     lines.append(f"qml_file: {qml_file} exists={qml_file.exists()}")
-    lines.append("importPaths: " + ", ".join(engine.importPathList()) or "(none)")
+    lines.append("importPaths: " + (", ".join(engine.importPathList()) or "(none)"))
+    from PySide6.QtCore import QLibraryInfo
+
+    lines.append(
+        "LibraryPaths: "
+        + ", ".join(QLibraryInfo.path(QLibraryInfo.LibraryPath.ImportsPath))
+    )
     return "\n".join(lines)
 
 
@@ -185,12 +191,13 @@ def _run(argv=None) -> int:
 
     qml_messages = _qml_message_capture()
     engine = QQmlApplicationEngine()
+    qml_warnings = _engine_errors_capture(engine)
     qml_file = Path(__file__).parent / "qml" / "main.qml"
     engine.load(QUrl.fromLocalFile(str(qml_file)))
     if not engine.rootObjects():
         _startup_log(
             "failed to load main.qml"
-            + _engine_errors(engine)
+            + qml_warnings()
             + ("\nqml messages:\n" + "\n".join(qml_messages) if qml_messages else "")
             + "\n" + _qml_import_probe(engine, qml_file)
             + "\n" + _bundled_qml_modules()
