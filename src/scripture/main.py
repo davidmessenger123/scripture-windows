@@ -150,7 +150,7 @@ def _qml_import_probe(engine, qml_file) -> str:
 
     lines.append(
         "LibraryPaths: "
-        + ", ".join(QLibraryInfo.path(QLibraryInfo.LibraryPath.ImportsPath))
+        + ", ".join(QLibraryInfo.path(QLibraryInfo.LibraryPath.QmlImportsPath))
     )
     return "\n".join(lines)
 
