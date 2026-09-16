@@ -8,13 +8,12 @@ Run with `python -m scripture`, or `python -m scripture --smoke` for a
 headless load test (`QT_QPA_PLATFORM=offscreen`).
 """
 
-import math
 import os
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QMetaObject, QPointF, QTimer, QUrl, Qt
-from PySide6.QtGui import QAction, QCloseEvent, QColor, QIcon, QPainter, QPen, QPixmap, QPolygonF
+from PySide6.QtCore import QMetaObject, QTimer, QUrl, Qt
+from PySide6.QtGui import QAction, QCloseEvent, QColor, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtQuick import QQuickView
 from PySide6.QtQml import QQmlApplicationEngine, qmlRegisterSingletonInstance
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
@@ -48,7 +47,7 @@ class SettingsView(QQuickView):
 
 
 def _make_icon() -> QIcon:
-    """A small dark rounded square with a gold star (tray + window icon)."""
+    """A small dark rounded square with a gold cross (tray + window icon)."""
     size = 64
     pm = QPixmap(size, size)
     pm.fill(Qt.GlobalColor.transparent)
@@ -58,14 +57,10 @@ def _make_icon() -> QIcon:
     painter.setBrush(QColor("#0d1b2a"))
     painter.drawRoundedRect(4, 4, size - 8, size - 8, 12, 12)
 
-    cx, cy, outer, inner = 32.0, 34.0, 20.0, 9.0
-    points = []
-    for i in range(10):
-        radius = outer if i % 2 == 0 else inner
-        angle = math.radians(-90.0 + i * 36.0)
-        points.append(QPointF(cx + radius * math.cos(angle), cy + radius * math.sin(angle)))
     painter.setBrush(QColor("#f5c542"))
-    painter.drawPolygon(QPolygonF(points))
+    r = size / 22
+    painter.drawRoundedRect(size * 0.43, size * 0.15, size * 0.14, size * 0.62, r, r)
+    painter.drawRoundedRect(size * 0.375, size * 0.30, size * 0.25, size * 0.14, r, r)
     painter.end()
     return QIcon(pm)
 

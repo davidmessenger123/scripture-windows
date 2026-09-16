@@ -18,7 +18,7 @@ You don't need Python or any tools. Download a prebuilt installer from the
    It installs per-user (no admin password) and adds a Start-menu entry.
 2. If Windows shows **"Windows protected your PC"**, the app is unsigned (that
    is normal for indie software): click **More info → Run anyway**.
-3. Look for the **gold star ** in the system tray, right-click it, and choose
+3. Look for the **gold cross ** in the system tray, right-click it, and choose
    **Open Scripture**.
 
 First-run tip: choose **Settings…** from the tray to optionally paste an ESV
@@ -76,7 +76,7 @@ From the repo root in PowerShell:
 - `build.ps1` produces `dist\Scripture.exe` (works by itself, no install).
 - `build-installer.ps1` also compiles a per-user installer and needs
   [Inno Setup 6](https://jrsoftware.org/isinfo.php) installed.
-- Both embed the star icon (`assets\app.ico`) and need Python 3.9+.
+- Both embed the cross icon (`assets\app.ico`) and need Python 3.9+.
 
 **Release automation:** push a tag (`git tag v0.1.0 && git push --tags`) and the
 [GitHub Actions workflow](.github/workflows/build-release.yml) builds both files
