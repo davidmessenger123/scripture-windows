@@ -91,10 +91,18 @@ def _make_icon() -> QIcon:
 
 def _engine_errors(engine) -> str:
     """Collect the QQmlEngine's error strings for a diagnostic log line."""
-    errors = []
-    for error in engine.errors():
-        errors.append(str(error.toString()))
-    return ":\n" + "\n".join(errors) if errors else ""
+    collected = []
+    for attr in ("errors", "warnings"):
+        getter = getattr(engine, attr, None)
+        if getter is None:
+            continue
+        try:
+            qml_errors = getter()
+        except Exception:
+            continue
+        for qerr in qml_errors or []:
+            collected.append(str(qerr.toString()))
+    return ":\n" + "\n".join(collected) if collected else ""
 
 
 def main(argv=None) -> int:
