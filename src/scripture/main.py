@@ -105,6 +105,37 @@ def _engine_errors(engine) -> str:
     return ":\n" + "\n".join(collected) if collected else ""
 
 
+def _qml_message_capture(ctx=None):
+    """Return a list that a Qt message handler appends QML errors to."""
+    buf = []
+
+    def handler(mode, context, message):
+        cat = context.category if context else ""
+        if cat.startswith("qml") or "qml" in cat.lower() and message:
+            buf.append(message)
+        elif "QQmlEngine" in message or "incorrect module" in message:
+            buf.append(message)
+
+    from PySide6.QtCore import qInstallMessageHandler
+
+    qInstallMessageHandler(handler)
+    return buf
+
+
+def _bundled_qml_modules() -> str:
+    """List the QML module dirs actually present in a frozen bundle."""
+    if not getattr(sys, "frozen", False):
+        return ""
+    root = Path(getattr(sys, "_MEIPASS", "/"))
+    qml_root = root / "PySide6" / "qml"
+    if not qml_root.exists():
+        return "(no PySide6/qml in bundle)"
+    modules = sorted(p.relative_to(qml_root) for p in qml_root.rglob("qmldir"))
+    return "bundled modules:\n" + "\n".join(
+        "  " + str(m.parent).replace("\\", "/") for m in modules
+    )
+
+
 def _qml_import_probe(engine, qml_file) -> str:
     """Describe the frozen bundle state around the QML load, for a startup log."""
     lines = []
@@ -149,6 +180,7 @@ def _run(argv=None) -> int:
     checker = UpdateChecker(__version__, app)
     qmlRegisterSingletonInstance(UpdateChecker, "ScriptureRT", 1, 0, "Updater", checker)
 
+    qml_messages = _qml_message_capture()
     engine = QQmlApplicationEngine()
     qml_file = Path(__file__).parent / "qml" / "main.qml"
     engine.load(QUrl.fromLocalFile(str(qml_file)))
@@ -156,7 +188,9 @@ def _run(argv=None) -> int:
         _startup_log(
             "failed to load main.qml"
             + _engine_errors(engine)
+            + ("\nqml messages:\n" + "\n".join(qml_messages) if qml_messages else "")
             + "\n" + _qml_import_probe(engine, qml_file)
+            + "\n" + _bundled_qml_modules()
         )
         return 1
 
