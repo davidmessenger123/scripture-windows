@@ -1,0 +1,231 @@
+name: Build macOS app
+
+# Builds Scripture for macOS as a signed + notarized .dmg (when Developer ID
+# secrets are configured) or an ad-hoc-signed .dmg for personal testing (when
+# they are not). Mirrors the Windows workflow: same deps, source smoke test,
+# frozen smoke test, boot check, and tag-based release publishing.
+#
+# Signing secrets (add in repo Settings -> Secrets and variables -> Actions):
+#   MACOS_CERT_BASE64          base64 of the Developer ID Application .p12
+#   MACOS_CERT_PASSWORD        password for that .p12
+#   MACOS_NOTARIZE_APPLE_ID    your Apple Account email
+#   MACOS_NOTARIZE_TEAM_ID     your Team ID
+#   MACOS_NOTARIZE_APPLE_PASSWORD  app-specific password for notarytool
+# Without them every step except codesign/notarize still runs and a working
+# ad-hoc build is produced; add the secrets later to switch on distribution.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15        # Apple Silicon
+            arch: arm64
+          - runner: macos-15-intel  # Intel
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+          python -m pip install pyinstaller
+
+      - name: Headless smoke test (source)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m scripture --smoke
+
+      - name: Generate app icon (app.icns)
+        run: python scripts/make_icns.py
+
+      - name: Build .app with PyInstaller
+        run: python -m PyInstaller --noconfirm --clean Scripture-macos.spec
+
+      - name: Smoke test the frozen .app
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          APP="dist/Scripture.app/Contents/MacOS/Scripture"
+          LOG="$HOME/Library/Application Support/davidjm/scripture/startup-error.log"
+          rm -f "$LOG"
+          "$APP" --smoke >/tmp/smoke.out 2>&1 &
+          PID=$!
+          for _ in $(seq 1 60); do
+            if ! kill -0 "$PID" 2>/dev/null; then break; fi
+            sleep 0.5
+          done
+          if kill -0 "$PID" 2>/dev/null; then
+            kill -9 "$PID" 2>/dev/null || true
+            echo "frozen --smoke did not exit within 30s"
+            [ -f "$LOG" ] && cat "$LOG"
+            cat /tmp/smoke.out
+            exit 1
+          fi
+          wait "$PID"; CODE=$?
+          if [ "$CODE" -ne 0 ]; then
+            echo "frozen --smoke failed with exit code $CODE"
+            [ -f "$LOG" ] && cat "$LOG"
+            cat /tmp/smoke.out
+            exit 1
+          fi
+          if [ -f "$LOG" ]; then
+            echo "startup-error.log was written during smoke test"
+            cat "$LOG"
+            exit 1
+          fi
+
+      - name: Boot check (tray path, 10 s)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          APP="dist/Scripture.app/Contents/MacOS/Scripture"
+          LOG="$HOME/Library/Application Support/davidjm/scripture/startup-error.log"
+          rm -f "$LOG"
+          "$APP" >/tmp/boot.out 2>&1 &
+          PID=$!
+          sleep 10
+          if ! kill -0 "$PID" 2>/dev/null; then
+            echo "Scripture exited on its own after startup"
+            [ -f "$LOG" ] && cat "$LOG"
+            cat /tmp/boot.out
+            exit 1
+          fi
+          if [ -f "$LOG" ]; then
+            echo "startup-error.log was written during the boot check"
+            cat "$LOG"
+            kill -9 "$PID" 2>/dev/null || true
+            exit 1
+          fi
+          kill "$PID" 2>/dev/null || true
+
+      - name: Codesign with Developer ID (skip if no cert)
+        if: env.MACOS_CERT_BASE64 != ''
+        env:
+          MACOS_CERT_BASE64: ${{ secrets.MACOS_CERT_BASE64 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          APP="dist/Scripture.app"
+          KEYCHAIN="scripture-signing"
+          KEYCHAIN_PATH="$RUNNER_TEMP/scripture-signing.keychain-db"
+          IDENTITY="Developer ID Application"
+
+          security create-keychain -p "$MACOS_CERT_PASSWORD" "$KEYCHAIN_PATH"
+          security default-keychain -s "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$MACOS_CERT_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 300 "$KEYCHAIN_PATH"
+
+          echo -n "$MACOS_CERT_BASE64" | base64 --decode > "$RUNNER_TEMP/dev-id.p12"
+          security import "$RUNNER_TEMP/dev-id.p12" -P "$MACOS_CERT_PASSWORD" -k "$KEYCHAIN_PATH" -T /usr/bin/codesign
+
+          # Intermediate cert (Developer ID G2 CA) if not already in the chain.
+          if ! security find-certificate -c "Developer ID Certification Authority" "$KEYCHAIN_PATH" >/dev/null 2>&1; then
+            curl -fsSL https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer -o "$RUNNER_TEMP/g2.cer"
+            security import "$RUNNER_TEMP/g2.cer" -k "$KEYCHAIN_PATH"
+          fi
+
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$MACOS_CERT_PASSWORD" "$KEYCHAIN_PATH"
+
+          # Sign every Mach-O (frameworks/Qt/Python binaries have no extension,
+          # so match by file type, not name) with hardened runtime + timestamp.
+          find "$APP/Contents" -type f -exec /bin/sh -c '
+            case "$(file -b "$1")" in
+              Mach-O*) /usr/bin/codesign --force --options runtime --timestamp --sign '"$IDENTITY"' "$1" ;;
+            esac' _ {} \;
+
+          # Now sign the bundle itself, then verify the full chain.
+          /usr/bin/codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP"
+          /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP"
+          /usr/bin/codesign -d -vv "$APP" 2>&1 | grep -q "Developer ID Application" \
+            || { echo "codesign authorities missing Developer ID Application"; exit 1; }
+
+      - name: Notarize and staple (skip without credentials)
+        if: env.MACOS_NOTARIZE_APPLE_ID != ''
+        env:
+          MACOS_NOTARIZE_APPLE_ID: ${{ secrets.MACOS_NOTARIZE_APPLE_ID }}
+          MACOS_NOTARIZE_APPLE_PASSWORD: ${{ secrets.MACOS_NOTARIZE_APPLE_PASSWORD }}
+          MACOS_NOTARIZE_TEAM_ID: ${{ secrets.MACOS_NOTARIZE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          APP="dist/Scripture.app"
+          ZIP="${{ runner.temp }}/Scripture.zip"
+          ditto -c -k --keepParent "$APP" "$ZIP"
+          SUB_OUT=$(xcrun notarytool submit "$ZIP" \
+            --apple-id "$MACOS_NOTARIZE_APPLE_ID" \
+            --password "$MACOS_NOTARIZE_APPLE_PASSWORD" \
+            --team-id "$MACOS_NOTARIZE_TEAM_ID" \
+            --wait 2>&1)
+          printf '%s\n' "$SUB_OUT"
+          if ! printf '%s\n' "$SUB_OUT" | grep -q "status: Accepted"; then
+            ID=$(printf '%s\n' "$SUB_OUT" | sed -n 's/.*id: \([0-9a-f-]*\).*/\1/p' | head -n1)
+            if [ -n "$ID" ]; then
+              xcrun notarytool log "$ID" --apple-id "$MACOS_NOTARIZE_APPLE_ID" \
+                --password "$MACOS_NOTARIZE_APPLE_PASSWORD" --team-id "$MACOS_NOTARIZE_TEAM_ID"
+            fi
+            exit 1
+          fi
+          xcrun stapler staple "$APP"
+          xcrun stapler validate "$APP"
+
+      - name: Compute version
+        id: version
+        run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            v="${GITHUB_REF_NAME#v}"
+          else
+            v="0.1.0-ci"
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Package .dmg
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          ARCH="${{ matrix.arch }}"
+          STAGING="$RUNNER_TEMP/dmg-staging"
+          mkdir -p "$STAGING"
+          cp -R "dist/Scripture.app" "$STAGING/"
+          ln -s /Applications "$STAGING/Applications"
+          hdiutil create \
+            -volname "Scripture $VERSION" \
+            -srcfolder "$STAGING" \
+            -ov \
+            -format UDZO \
+            -fs HFS+ \
+            "dist/Scripture-$VERSION-$ARCH.dmg"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: scripture-macos-${{ matrix.arch }}
+          path: |
+            dist/Scripture-${{ steps.version.outputs.version }}-${{ matrix.arch }}.dmg
+            dist/Scripture.app
+
+      - name: Publish GitHub Release (tag push only)
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="$GITHUB_REF_NAME"
+          VERSION="${{ steps.version.outputs.version }}"
+          DMG="dist/Scripture-$VERSION-${{ matrix.arch }}.dmg"
+          gh release view "$TAG" >/dev/null 2>&1 \
+            || gh release create "$TAG" --title "Scripture $TAG" --generate-notes
+          gh release upload "$TAG" "$DMG" --clobber
