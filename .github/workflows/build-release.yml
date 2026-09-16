@@ -40,10 +40,21 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          $p = Start-Process -FilePath dist\Scripture.exe -ArgumentList '--smoke' -PassThru -Wait
+          $p = Start-Process -FilePath dist\Scripture.exe -ArgumentList '--smoke' -PassThru
+          $deadline = (Get-Date).AddSeconds(20)
+          while (-not $p.HasExited -and (Get-Date) -lt $deadline) {
+            Start-Sleep -Milliseconds 500
+            if ($p.HasExited) { break }
+          }
+          if (-not $p.HasExited) {
+            Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+            $log = Join-Path (Join-Path $env:LOCALAPPDATA 'davidjm') 'scripture\startup-error.log'
+            if (Test-Path $log) { Get-Content $log | Write-Error }
+            throw "frozen exe smoke test did not exit within 20s (windowed traceback dialog? crash?)"
+          }
           $code = $p.ExitCode
           if ($code -ne 0) {
-            $log = Join-Path $env:LOCALAPPDATA 'davidjm\scripture\startup-error.log'
+            $log = Join-Path (Join-Path $env:LOCALAPPDATA 'davidjm') 'scripture\startup-error.log'
             if (Test-Path $log) { Get-Content $log | Write-Error }
             throw "frozen exe smoke test failed with exit code $code"
           }
@@ -54,12 +65,20 @@ jobs:
           QT_QPA_PLATFORM: offscreen
           SCRIPTURE_FORCE_UPDATE_CHECK: "1"
         run: |
-          $p = Start-Process -FilePath dist\Scripture.exe -PassThru -NoNewWindow
+          $p = Start-Process -FilePath dist\Scripture.exe -PassThru
           Start-Sleep -Seconds 12
+          $log = Join-Path (Join-Path $env:LOCALAPPDATA 'davidjm') 'scripture\startup-error.log'
           if ($p.HasExited) {
-            $log = Join-Path $env:LOCALAPPDATA 'davidjm\scripture\startup-error.log'
             if (Test-Path $log) { Get-Content $log | Write-Error }
             throw "Scripture.exe exited on its own after startup (exit code $($p.ExitCode))"
+          }
+          if (Test-Path $log) {
+            $err = Get-Content $log -Raw
+            if ($err -and (Get-Item $log).LastWriteTime -gt (Get-Date).AddSeconds(-15)) {
+              Get-Content $log | Write-Error
+              Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+              throw "startup-error.log was written during the boot check"
+            }
           }
           Stop-Process -Id $p.Id
 
