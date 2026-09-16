@@ -110,11 +110,14 @@ def _qml_message_capture(ctx=None):
     buf = []
 
     def handler(mode, context, message):
-        cat = context.category if context else ""
-        if cat.startswith("qml") or "qml" in cat.lower() and message:
-            buf.append(message)
-        elif "QQmlEngine" in message or "incorrect module" in message:
-            buf.append(message)
+        if context is None:
+            return
+        cat = context.category or ""
+        msg = str(message or "")
+        if cat.startswith("qml") or "QQmlEngine" in msg or "incorrect module" in msg:
+            buf.append(msg)
+        elif cat and "qml" in cat.lower() and msg:
+            buf.append(msg)
 
     from PySide6.QtCore import qInstallMessageHandler
 
