@@ -128,8 +128,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$env:GITHUB_REF_NAME" `
+          # The Windows and macOS workflows both run on a tag push, so either
+          # job may reach this step first: create the release only when it is
+          # missing, then upload (clobbering any partial upload from the other).
+          gh release view "$env:GITHUB_REF_NAME" *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create "$env:GITHUB_REF_NAME" `
+              --title "Scripture $env:GITHUB_REF_NAME" `
+              --generate-notes
+          }
+          gh release upload "$env:GITHUB_REF_NAME" `
             "dist\Scripture.exe" `
             "dist\Scripture-Setup-${{ steps.version.outputs.version }}.exe" `
-            --title "Scripture $env:GITHUB_REF_NAME" `
-            --generate-notes
+            --clobber
