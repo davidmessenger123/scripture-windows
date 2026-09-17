@@ -17,7 +17,18 @@ Window {
     color: "transparent"
 
     onVisibleChanged: if (visible) {
-        visibility = Window.FullScreen
+        // Fill the screen geometry manually rather than entering a native
+        // full-screen Space. On macOS, Window.FullScreen maps to a Spaces
+        // transition, and hiding that window leaves an empty black Space on
+        // screen when the overlay is closed. Manual geometry covers the same
+        // area on every platform and hides cleanly.
+        const scr = overlay.screen
+        if (scr) {
+            overlay.x = scr.virtualX
+            overlay.y = scr.virtualY
+            overlay.width = scr.width
+            overlay.height = scr.height
+        }
         // A frameless always-on-top window does not necessarily become the key
         // window by itself, and without key status the Esc handler never fires.
         // Ask for activation so keyboard dismissal works on every platform.
