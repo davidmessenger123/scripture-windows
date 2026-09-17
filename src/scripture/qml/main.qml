@@ -18,6 +18,10 @@ Window {
 
     onVisibleChanged: if (visible) {
         visibility = Window.FullScreen
+        // A frameless always-on-top window does not necessarily become the key
+        // window by itself, and without key status the Esc handler never fires.
+        // Ask for activation so keyboard dismissal works on every platform.
+        requestActivate()
         Qt.callLater(function () { keyCatcher.forceActiveFocus() })
     }
 
@@ -408,6 +412,27 @@ Window {
                         horizontalAlignment: Text.AlignHCenter
                     }
                 }
+            }
+
+            // Explicit, always-visible close affordance. The overlay can also be
+            // dismissed with Esc or a bare-scrim click, but neither is reliable
+            // when keyboard focus or the click target is not — so the corner
+            // button is the guaranteed way out of a full-screen verse. It is a
+            // sibling of the scaled cluster (not inside it) so it never shrinks
+            // or drifts with the content.
+            OverlayButton {
+                id: closeButton
+                anchors.top: parent.top
+                anchors.right: parent.right
+                anchors.topMargin: 24
+                anchors.rightMargin: 24
+                text: "\u2715  Close"
+                tip: "Close the overlay (Esc)"
+                padX: 16
+                padY: 7
+                radius: 17
+                fg: "white"
+                onClicked: App.close_overlay()
             }
         }
 }
