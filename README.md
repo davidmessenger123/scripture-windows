@@ -1,13 +1,15 @@
 # Scripture
 
-A **Bible verse of the day** for Windows: a random Scripture passage revealed on
-a full-screen dark overlay, with favorites, history, a fixed verse of the day,
-and a daily auto-open time. It is a desktop port of the author's
+A **Bible verse of the day** for Windows, macOS, and iOS: a random Scripture
+passage revealed in a focused, dark reading experience, with favorites,
+history, a fixed verse of the day, and a daily reminder. The desktop versions
+are ports of the author's
 [Omarchy Scripture](https://github.com/davidmessenger123/omarchy-scripture) bar
-widget — the same curated no-repeat deck, the same ESV/WEB/KJV providers, the
-same reveal and scrim look — with no Omarchy or Quickshell dependency.
+widget — the same curated no-repeat deck, the same ESV/WEB/KJV providers, and
+the same reveal and scrim look — with no Omarchy or Quickshell dependency.
 
-Runs as a system-tray app.
+The Windows and macOS versions run as desktop apps; the native iOS port lives
+in [`ios/`](ios/).
 
 ## Install for end users (no technical setup)
 
@@ -123,6 +125,17 @@ src/scripture/
 
 The Omarchy plugin remains the upstream source of truth; when the two diverge,
 port the change back into both.
+
+## iOS
+
+A native SwiftUI port is in [`ios/`](ios/). Open
+`ios/Scripture.xcodeproj` in Xcode after installing the iOS SDK. It targets
+iOS 17 and supports iPhone and iPad.
+
+The iOS version keeps the Scripture providers, no-repeat deck, passage reveal,
+favorites, history, fixed verse, and jump-to-reference features. The desktop
+system tray is replaced by the app's normal iOS screen, and the daily reminder
+uses a local notification because iOS cannot force-open a suspended app.
 
 ## License
 

@@ -1,0 +1,448 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		B00000000000000000000001 /* ScriptureApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000001 /* ScriptureApp.swift */; };
+		B00000000000000000000002 /* ScriptureModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000002 /* ScriptureModels.swift */; };
+		B00000000000000000000003 /* ScriptureAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000003 /* ScriptureAPI.swift */; };
+		B00000000000000000000004 /* SettingsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000004 /* SettingsStore.swift */; };
+		B00000000000000000000005 /* FavoritesStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000005 /* FavoritesStore.swift */; };
+		B00000000000000000000006 /* NotificationScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000006 /* NotificationScheduler.swift */; };
+		B00000000000000000000007 /* ScriptureViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000007 /* ScriptureViewModel.swift */; };
+		B00000000000000000000008 /* Components.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000008 /* Components.swift */; };
+		B00000000000000000000009 /* JumpView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000009 /* JumpView.swift */; };
+		B0000000000000000000000A /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0000000000000000000000A /* SettingsView.swift */; };
+		B0000000000000000000000B /* VerseView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0000000000000000000000B /* VerseView.swift */; };
+		B0000000000000000000000C /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F0000000000000000000000C /* Assets.xcassets */; };
+		B0000000000000000000000D /* ScriptureReferenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0000000000000000000000D /* ScriptureReferenceTests.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		A00000000000000000000020 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A00000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A0000000000000000000000A;
+			remoteInfo = Scripture;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		F00000000000000000000001 /* ScriptureApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptureApp.swift; sourceTree = "<group>"; };
+		F00000000000000000000002 /* ScriptureModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptureModels.swift; sourceTree = "<group>"; };
+		F00000000000000000000003 /* ScriptureAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptureAPI.swift; sourceTree = "<group>"; };
+		F00000000000000000000004 /* SettingsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsStore.swift; sourceTree = "<group>"; };
+		F00000000000000000000005 /* FavoritesStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FavoritesStore.swift; sourceTree = "<group>"; };
+		F00000000000000000000006 /* NotificationScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationScheduler.swift; sourceTree = "<group>"; };
+		F00000000000000000000007 /* ScriptureViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptureViewModel.swift; sourceTree = "<group>"; };
+		F00000000000000000000008 /* Components.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components.swift; sourceTree = "<group>"; };
+		F00000000000000000000009 /* JumpView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JumpView.swift; sourceTree = "<group>"; };
+		F0000000000000000000000A /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		F0000000000000000000000B /* VerseView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerseView.swift; sourceTree = "<group>"; };
+		F0000000000000000000000C /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		F0000000000000000000000D /* ScriptureReferenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptureReferenceTests.swift; sourceTree = "<group>"; };
+		A0000000000000000000000C /* Scripture.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Scripture.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A0000000000000000000000D /* ScriptureTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ScriptureTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A0000000000000000000000E /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A00000000000000000000012 /* Test Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A00000000000000000000002 = {
+			isa = PBXGroup;
+			children = (
+				A00000000000000000000004 /* Scripture */,
+				A00000000000000000000009 /* ScriptureTests */,
+				A00000000000000000000003 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		A00000000000000000000003 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A0000000000000000000000C /* Scripture.app */,
+				A0000000000000000000000D /* ScriptureTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		A00000000000000000000004 /* Scripture */ = {
+			isa = PBXGroup;
+			children = (
+				F00000000000000000000001 /* ScriptureApp.swift */,
+				A00000000000000000000005 /* Models */,
+				A00000000000000000000006 /* Services */,
+				A00000000000000000000007 /* ViewModels */,
+				A00000000000000000000008 /* Views */,
+				F0000000000000000000000C /* Assets.xcassets */,
+			);
+			path = Scripture;
+			sourceTree = "<group>";
+		};
+		A00000000000000000000005 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				F00000000000000000000002 /* ScriptureModels.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		A00000000000000000000006 /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				F00000000000000000000003 /* ScriptureAPI.swift */,
+				F00000000000000000000004 /* SettingsStore.swift */,
+				F00000000000000000000005 /* FavoritesStore.swift */,
+				F00000000000000000000006 /* NotificationScheduler.swift */,
+			);
+			path = Services;
+			sourceTree = "<group>";
+		};
+		A00000000000000000000007 /* ViewModels */ = {
+			isa = PBXGroup;
+			children = (
+				F00000000000000000000007 /* ScriptureViewModel.swift */,
+			);
+			path = ViewModels;
+			sourceTree = "<group>";
+		};
+		A00000000000000000000008 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				F00000000000000000000008 /* Components.swift */,
+				F00000000000000000000009 /* JumpView.swift */,
+				F0000000000000000000000A /* SettingsView.swift */,
+				F0000000000000000000000B /* VerseView.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		A00000000000000000000009 /* ScriptureTests */ = {
+			isa = PBXGroup;
+			children = (
+				F0000000000000000000000D /* ScriptureReferenceTests.swift */,
+			);
+			path = ScriptureTests;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A0000000000000000000000A /* Scripture */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A00000000000000000000015 /* Build configuration list for PBXNativeTarget "Scripture" */;
+			buildPhases = (
+				A00000000000000000000010 /* Sources */,
+				A0000000000000000000000E /* Frameworks */,
+				A00000000000000000000011 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = Scripture;
+			productName = Scripture;
+			productReference = A0000000000000000000000C /* Scripture.app */;
+			productType = "com.apple.product-type.application";
+		};
+		A0000000000000000000000B /* ScriptureTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A00000000000000000000016 /* Build configuration list for PBXNativeTarget "ScriptureTests" */;
+			buildPhases = (
+				A00000000000000000000013 /* Test Sources */,
+				A00000000000000000000012 /* Test Frameworks */,
+				A00000000000000000000022 /* Test Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A00000000000000000000021 /* PBXTargetDependency */,
+			);
+			name = ScriptureTests;
+			productName = ScriptureTests;
+			productReference = A0000000000000000000000D /* ScriptureTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A00000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+					A0000000000000000000000A = {
+						CreatedOnToolsVersion = 16.0;
+					};
+					A0000000000000000000000B = {
+						CreatedOnToolsVersion = 16.0;
+						TestTargetID = A0000000000000000000000A;
+					};
+				};
+			};
+			buildConfigurationList = A00000000000000000000014 /* Build configuration list for PBXProject "Scripture" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = A00000000000000000000002;
+			productRefGroup = A00000000000000000000003 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A0000000000000000000000A /* Scripture */,
+				A0000000000000000000000B /* ScriptureTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A00000000000000000000011 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B0000000000000000000000C /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A00000000000000000000022 /* Test Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A00000000000000000000010 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B00000000000000000000001 /* ScriptureApp.swift in Sources */,
+				B00000000000000000000002 /* ScriptureModels.swift in Sources */,
+				B00000000000000000000003 /* ScriptureAPI.swift in Sources */,
+				B00000000000000000000004 /* SettingsStore.swift in Sources */,
+				B00000000000000000000005 /* FavoritesStore.swift in Sources */,
+				B00000000000000000000006 /* NotificationScheduler.swift in Sources */,
+				B00000000000000000000007 /* ScriptureViewModel.swift in Sources */,
+				B00000000000000000000008 /* Components.swift in Sources */,
+				B00000000000000000000009 /* JumpView.swift in Sources */,
+				B0000000000000000000000A /* SettingsView.swift in Sources */,
+				B0000000000000000000000B /* VerseView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A00000000000000000000013 /* Test Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B0000000000000000000000D /* ScriptureReferenceTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		A00000000000000000000021 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A0000000000000000000000A /* Scripture */;
+			targetProxy = A00000000000000000000020 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		A00000000000000000000017 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		A00000000000000000000018 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		A00000000000000000000019 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				MARKETING_VERSION = 0.1.11;
+				ENABLE_TESTABILITY = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Scripture;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.lifestyle";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.davidjm.scripture;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		A0000000000000000000001A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				MARKETING_VERSION = 0.1.11;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Scripture;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.lifestyle";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.davidjm.scripture;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		A0000000000000000000001B /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				MARKETING_VERSION = 0.1.11;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				PRODUCT_BUNDLE_IDENTIFIER = com.davidjm.scripture.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Scripture.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Scripture";
+			};
+			name = Debug;
+		};
+		A0000000000000000000001C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				MARKETING_VERSION = 0.1.11;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				PRODUCT_BUNDLE_IDENTIFIER = com.davidjm.scripture.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Scripture.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Scripture";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A00000000000000000000014 /* Build configuration list for PBXProject "Scripture" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A00000000000000000000017 /* Debug */,
+				A00000000000000000000018 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A00000000000000000000015 /* Build configuration list for PBXNativeTarget "Scripture" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A00000000000000000000019 /* Debug */,
+				A0000000000000000000001A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A00000000000000000000016 /* Build configuration list for PBXNativeTarget "ScriptureTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A0000000000000000000001B /* Debug */,
+				A0000000000000000000001C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = A00000000000000000000001 /* Project object */;
+}
