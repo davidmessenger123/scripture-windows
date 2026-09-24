@@ -1,12 +1,12 @@
 import ctypes
 import os
-import selectors
 import shlex
 import signal
 import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -118,84 +118,165 @@ class SecretStore:
 
 
 def _kill_process_group(process):
-    try:
-        os.killpg(process.pid, signal.SIGKILL)
-    except OSError:
+    killpg = getattr(os, "killpg", None)
+    if os.name != "nt" and killpg is not None:
         try:
-            process.kill()
-        except OSError:
+            kill_signal = getattr(signal, "SIGKILL", getattr(signal, "SIGTERM", 9))
+            killpg(process.pid, kill_signal)
+            return
+        except (AttributeError, NotImplementedError, OSError):
             pass
+    try:
+        process.kill()
+    except (AttributeError, NotImplementedError, OSError):
+        pass
 
 
 def _run_bounded(command, input_bytes=None, max_bytes=513, timeout=5):
-    process = None
-    selector = None
-    output = bytearray()
-    status = None
     try:
-        process = subprocess.Popen(
-            command,
-            stdin=subprocess.PIPE if input_bytes is not None else subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            env=_helper_environment(),
-            start_new_session=True,
-            close_fds=True,
-            bufsize=0,
-        )
-        if input_bytes is not None and process.stdin is not None:
+        output_limit = int(max_bytes)
+        timeout_limit = max(0.1, min(float(timeout), 30.0))
+    except (OverflowError, TypeError, ValueError):
+        return None
+    if output_limit < 0:
+        return None
+
+    process = None
+    reader = None
+    writer = None
+    output = bytearray()
+    reader_failure = []
+    status = None
+    read_failed = False
+    try:
+        popen_options = {
+            "stdin": subprocess.PIPE if input_bytes is not None else subprocess.DEVNULL,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.DEVNULL,
+            "env": _helper_environment(),
+            "close_fds": True,
+            "bufsize": 0,
+        }
+        if os.name != "nt":
+            popen_options["start_new_session"] = True
+        process = subprocess.Popen(command, **popen_options)
+
+        def read_output():
+            stream = process.stdout
+            if stream is None:
+                return
             try:
-                process.stdin.write(input_bytes)
-                process.stdin.close()
-            except (BrokenPipeError, OSError):
+                while len(output) <= output_limit:
+                    remaining = output_limit + 1 - len(output)
+                    chunk = stream.read(min(4096, remaining))
+                    if not chunk:
+                        return
+                    if len(chunk) > remaining:
+                        output.extend(chunk[:remaining])
+                        return
+                    output.extend(chunk)
+            except (OSError, TypeError, ValueError) as exc:
+                reader_failure.append(exc)
+
+        def write_input():
+            stream = process.stdin
+            if stream is None:
+                return
+            try:
+                remaining = memoryview(input_bytes)
+                while len(remaining):
+                    written = stream.write(remaining)
+                    if not isinstance(written, int) or written <= 0:
+                        break
+                    remaining = remaining[written:]
+                try:
+                    stream.flush()
+                except (OSError, ValueError):
+                    pass
+            except (OSError, TypeError, ValueError):
                 pass
-        selector = selectors.DefaultSelector()
-        selector.register(process.stdout, selectors.EVENT_READ)
-        deadline = time.monotonic() + max(0.1, min(float(timeout), 30.0))
-        while selector.get_map():
+            finally:
+                try:
+                    stream.close()
+                except (OSError, ValueError):
+                    pass
+
+        reader = threading.Thread(target=read_output, daemon=True)
+        reader.start()
+        if input_bytes is not None and process.stdin is not None:
+            writer = threading.Thread(target=write_input, daemon=True)
+            writer.start()
+
+        deadline = time.monotonic() + timeout_limit
+        while reader.is_alive() or (writer is not None and writer.is_alive()) or process.poll() is None:
+            if len(output) > output_limit:
+                status = 125
+                break
+            if reader_failure:
+                read_failed = True
+                break
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 status = 124
-                _kill_process_group(process)
                 break
-            for key, _ in selector.select(min(0.25, remaining)):
-                chunk = os.read(key.fileobj.fileno(), min(4096, max_bytes - len(output) + 1))
-                if not chunk:
-                    selector.unregister(key.fileobj)
-                    continue
-                output.extend(chunk)
-                if len(output) > max_bytes:
-                    status = 125
-                    _kill_process_group(process)
-                    break
-            if status is not None:
-                break
-        if status is None:
-            try:
-                status = process.wait(timeout=1)
-            except subprocess.TimeoutExpired:
+            time.sleep(min(0.01, remaining))
+
+        if status is None and len(output) > output_limit:
+            status = 125
+        if status is None and reader_failure:
+            read_failed = True
+        if status is not None or read_failed:
+            _kill_process_group(process)
+
+        try:
+            returncode = process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            if status is None:
                 status = 124
+            _kill_process_group(process)
+            try:
+                returncode = process.wait(timeout=1)
+            except subprocess.TimeoutExpired:
                 _kill_process_group(process)
+                returncode = process.poll()
+                if returncode is None:
+                    return None
+        if read_failed:
+            return None
+        if status is not None:
+            returncode = status
+        return subprocess.CompletedProcess(command, returncode, bytes(output[:output_limit]), None)
     except (OSError, TypeError, ValueError, subprocess.SubprocessError):
         if process is not None:
             _kill_process_group(process)
         return None
     finally:
-        if selector is not None:
-            selector.close()
         if process is not None:
-            for stream in (process.stdout, process.stdin):
+            try:
+                if process.poll() is None:
+                    _kill_process_group(process)
+                    try:
+                        process.wait(timeout=1)
+                    except (OSError, subprocess.SubprocessError):
+                        pass
+            except (AttributeError, OSError, subprocess.SubprocessError):
+                pass
+            for stream in (process.stdin, process.stdout):
                 if stream is not None:
                     try:
                         stream.close()
-                    except OSError:
+                    except (OSError, ValueError):
                         pass
-            if status is not None and process.poll() is None:
+            if reader is not None:
                 try:
-                    process.wait(timeout=1)
-                except (OSError, subprocess.SubprocessError):
+                    reader.join(timeout=1)
+                except RuntimeError:
                     pass
-    return subprocess.CompletedProcess(command, status, bytes(output[:max_bytes]), None)
+            if writer is not None:
+                try:
+                    writer.join(timeout=1)
+                except RuntimeError:
+                    pass
 
 
 def _keychain_load() -> str:

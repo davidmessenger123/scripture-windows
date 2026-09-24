@@ -5,6 +5,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from contextlib import nullcontext
 from pathlib import Path
 from unittest import mock
 
@@ -187,11 +188,17 @@ class UpdaterPureTests(unittest.TestCase):
             pending.mkdir()
             (pending / "artifact").write_bytes(b"x")
             old = 1
-            os.utime(link, (old, old), follow_symlinks=False)
             os.utime(pending, (old, old))
-            with mock.patch.object(updater_module.tempfile, "gettempdir", return_value=directory):
+            stale_clock = nullcontext()
+            try:
+                os.utime(link, (old, old), follow_symlinks=False)
+            except (NotImplementedError, OSError):
+                stale_clock = mock.patch.object(
+                    updater_module.time, "time", return_value=max(link.lstat().st_mtime, pending.stat().st_mtime) + 3601
+                )
+            with stale_clock, mock.patch.object(updater_module.tempfile, "gettempdir", return_value=directory):
                 cleanup_stale_update_helpers()
-            self.assertFalse(link.exists())
+            self.assertFalse(os.path.lexists(link))
             self.assertTrue(target.is_dir())
             self.assertFalse(pending.exists())
 
@@ -355,6 +362,15 @@ class PersistenceTests(unittest.TestCase):
             self.assertFalse(current.contains("apiKey"))
             self.assertEqual(store.load(), "legacy-key")
 
+    def test_bounded_kill_uses_process_fallback_on_windows(self):
+        process = mock.Mock(pid=123)
+        with mock.patch.object(secrets_module.os, "name", "nt"), mock.patch.object(
+            secrets_module.os, "killpg", create=True
+        ) as killpg:
+            secrets_module._kill_process_group(process)
+        killpg.assert_not_called()
+        process.kill.assert_called_once_with()
+
     def test_keychain_output_is_bounded_before_buffering(self):
         result = secrets_module._run_bounded(
             [sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'x' * 4096)"],
@@ -364,6 +380,25 @@ class PersistenceTests(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result.returncode, 125)
         self.assertLessEqual(len(result.stdout), 32)
+
+    def test_bounded_helper_forwards_input_and_enforces_timeout(self):
+        result = secrets_module._run_bounded(
+            [sys.executable, "-c", "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())"],
+            b"input",
+            max_bytes=5,
+            timeout=2,
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, b"input")
+
+        result = secrets_module._run_bounded(
+            [sys.executable, "-c", "import time; time.sleep(1)"],
+            max_bytes=1,
+            timeout=0.1,
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(result.returncode, 124)
 
         with mock.patch.dict(os.environ, {"GITHUB_TOKEN": "secret", "ESV_API_KEY": "secret"}, clear=False):
             self.assertNotIn("GITHUB_TOKEN", secrets_module._helper_environment())
