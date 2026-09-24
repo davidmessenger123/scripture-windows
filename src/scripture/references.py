@@ -14,6 +14,7 @@ import re
 # Hard cap mirrors the plugin: a single short passage is a few KB, so this
 # bounds a misbehaving endpoint without ever trimming a real response.
 MAX_RESPONSE_BYTES = 262144
+MAX_REFERENCE_BYTES = 120
 
 # Well-known, always-valid references drawn across the whole Bible. Random
 # picks are drawn from this deck so a request can never throw a nonexistent
@@ -86,9 +87,38 @@ SCRIPTURE = [
     "Revelation 3:20", "Revelation 21:4", "Revelation 22:20",
 ]
 
+_REFERENCE = re.compile(
+    r"^(?:[1-3]\s+)?[A-Za-z]+(?:\s+[A-Za-z]+)*\s+(\d{1,3}):(\d{1,3})(?:-(\d{1,3}))?$"
+)
 _RANGE = re.compile(r"^(.*?)\s+(\d+):(\d+)$")
 _FOCAL = re.compile(r"^.*?\s+\d+:(\d+)$")
 _VERSE_MARKER = re.compile(r"\[(\d+)\]([\s\S]*?)(?=\[\d+\]|$)", re.DOTALL)
+
+
+def normalize_reference(value: str) -> str:
+    if not isinstance(value, str) or any(ord(char) < 32 or ord(char) == 127 for char in value):
+        return ""
+    text = re.sub(r"[ \t]+", " ", value).strip()
+    if not text:
+        return ""
+    try:
+        if len(text.encode("utf-8")) > MAX_REFERENCE_BYTES:
+            return ""
+    except UnicodeError:
+        return ""
+    match = _REFERENCE.fullmatch(text)
+    if not match:
+        return ""
+    chapter = int(match.group(1))
+    verse = int(match.group(2))
+    end_verse = verse if match.group(3) is None else int(match.group(3))
+    if chapter < 1 or verse < 1 or end_verse < verse:
+        return ""
+    return text
+
+
+def is_valid_reference(value: str) -> bool:
+    return bool(normalize_reference(value))
 
 
 class Deck:
@@ -100,7 +130,11 @@ class Deck:
     """
 
     def __init__(self, references=None):
-        self._pool = list(references if references is not None else SCRIPTURE)
+        source = list(references if references is not None else SCRIPTURE)
+        self._pool = [normalize_reference(item) for item in source]
+        self._pool = [item for item in self._pool if item]
+        if not self._pool:
+            self._pool = list(SCRIPTURE)
         self._deck: list[str] = []
         self._pos = 0
 
@@ -158,10 +192,12 @@ def reference_text(payload: dict) -> str:
     """Best-effort anchor reference for a bible-api.com response."""
     random_verse = payload.get("random_verse") or {}
     if random_verse.get("book") and random_verse.get("chapter") and random_verse.get("verse"):
-        return "{0} {1}:{2}".format(
-            random_verse["book"], random_verse["chapter"], random_verse["verse"]
-        ).strip()
-    return str(payload.get("reference") or "").strip()
+        return normalize_reference(
+            "{0} {1}:{2}".format(
+                random_verse["book"], random_verse["chapter"], random_verse["verse"]
+            )
+        )
+    return normalize_reference(payload.get("reference") or "")
 
 
 def translation_text(payload: dict) -> str:
@@ -177,12 +213,19 @@ def range_query(reference: str, margin: int = 2) -> str:
 
     Returns 'John 3:14-18' so a tiny verse is never shown without context.
     """
-    match = _RANGE.match((reference or "").strip())
+    normalized = normalize_reference(reference)
+    if not normalized:
+        return ""
+    match = _RANGE.fullmatch(normalized)
     if not match:
-        return (reference or "").strip()
+        return normalized
     book = match.group(1)
     chapter = int(match.group(2))
     verse = int(match.group(3))
+    try:
+        margin = max(0, min(20, int(margin)))
+    except (TypeError, ValueError):
+        margin = 2
     start = max(1, verse - margin)
     end = verse + margin
     if start == end:
@@ -192,8 +235,9 @@ def range_query(reference: str, margin: int = 2) -> str:
 
 def focal_verse(reference: str) -> int:
     """Which verse number inside a fetched range is the curated anchor? 0 = not derivable."""
-    match = _FOCAL.match((reference or "").strip())
-    return int(match.group(1)) if match else 0
+    normalized = normalize_reference(reference)
+    match = _FOCAL.fullmatch(normalized) if normalized else None
+    return int(match.group(1)) if match and "-" not in normalized else 0
 
 
 def parse_numbered_passage(text: str, focal: int) -> tuple:
@@ -310,19 +354,26 @@ def compose_rich_text(before: str, focal: str, after: str, max_chars: int = -1) 
 
 def browser_url(reference: str, translation_id: str) -> str:
     """The public reading page for a reference in a given translation."""
-    slug = (reference or "").replace(" ", "+")
-    if (translation_id or "").lower() == "esv":
+    import urllib.parse
+
+    normalized = normalize_reference(reference)
+    if not normalized:
+        return ""
+    slug = urllib.parse.quote(normalized, safe="-_.!~*'()")
+    translation = str(translation_id or "web").strip().lower()
+    if translation == "esv":
         return "https://www.esv.org/" + slug + "/"
-    version = "KJV" if translation_id == "kjv" else "WEB"
+    version = "KJV" if translation == "kjv" else "WEB"
     return "https://www.biblegateway.com/passage/?search=" + slug + "&version=" + version
 
 
 def encode_reference(reference: str) -> str:
-    return quote(reference or "")
+    normalized = normalize_reference(reference)
+    return quote(normalized) if normalized else ""
 
 
 def quote(value: str) -> str:
     """Percent-encode like JavaScript's encodeURIComponent for URL segments."""
     import urllib.parse
 
-    return urllib.parse.quote(value, safe="-_.!~*'()")
+    return urllib.parse.quote(str(value or ""), safe="-_.!~*'()")

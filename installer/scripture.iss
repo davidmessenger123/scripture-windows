@@ -1,13 +1,13 @@
 ; Scripture — Inno Setup installer script.
 ;
 ; Compile with (from the repo root, after building dist\Scripture.exe):
-;   "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppVersion=0.1.0 installer\scripture.iss
+;   "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppVersion=MAJOR.MINOR.PATCH installer\scripture.iss
 ;
 ; The installer is per-user (no admin / UAC prompt needed) and produces
 ; dist\Scripture-Setup-<version>.exe.
 
 #ifndef AppVersion
-  #define AppVersion "0.1.0"
+  #error AppVersion must be supplied by the versioned build script
 #endif
 
 [Setup]

@@ -20,7 +20,7 @@ a = Analysis(
     ['src/scripture/__main__.py'],
     pathex=['src'],
     binaries=[],
-    datas=[('src/scripture/qml', 'scripture/qml')],
+    datas=[('src/scripture/qml', 'scripture/qml'), ('src/scripture/VERSION', 'scripture')],
     hiddenimports=['PySide6.QtQml'],
     hookspath=['packaging/pyinstaller'],
     hooksconfig={},

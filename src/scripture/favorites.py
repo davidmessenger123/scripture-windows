@@ -1,17 +1,13 @@
-"""User favorites persistence for the Scripture desktop app.
-
-Faithful port of the Omarchy widget's `favorites.py`, keeping the same
-discipline: references travel as plain strings, the list is capped, and writes
-go to a same-directory temporary file that is fsynced before an atomic
-`os.replace` so a partially-written store can never be observed. The file lives
-in the platform app-data directory (e.g. `%APPDATA%\\Scripture\\favorites.json`
-on Windows) instead of beside a plugin folder.
-"""
-
 import json
 import os
 import stat
 import sys
+import tempfile
+
+try:
+    from . import references
+except ImportError:
+    import references
 
 MAX_ANCHOR_BYTES = 120
 MAX_ENTRIES = 200
@@ -23,13 +19,6 @@ class FavoritesError(RuntimeError):
 
 
 class FavoritesStore:
-    """Thread-hostile by design: call from the one thread that owns it.
-
-    Rides on `QStandardPaths.writableLocation(AppDataLocation)` for the data
-    folder (created on demand), so `%APPDATA%` is honored on Windows and a
-    sane XDG dir is used on other platforms.
-    """
-
     def __init__(self, data_dir: str):
         self._dir = data_dir
         self._path = os.path.join(data_dir, "favorites.json")
@@ -39,40 +28,54 @@ class FavoritesStore:
         return self._path
 
     def ensure_dir(self) -> None:
-        os.makedirs(self._dir, exist_ok=True)
-
-    # -- reads ------------------------------------------------------------
+        try:
+            os.makedirs(self._dir, exist_ok=True)
+        except OSError as exc:
+            raise FavoritesError("could not create favorites directory: %s" % exc) from exc
 
     def list(self) -> list:
         try:
-            with open(self._path, "r", encoding="utf-8", newline="") as fh:
-                data = fh.read(MAX_JSON_BYTES + 1)
+            with open(self._path, "rb") as fh:
+                raw = fh.read(MAX_JSON_BYTES + 1)
+            data = raw.decode("utf-8")
         except FileNotFoundError:
             return []
-        except OSError as exc:
+        except (OSError, UnicodeError) as exc:
             raise FavoritesError("favorites file refused open: %s" % exc) from exc
-
-        if len(data) > MAX_JSON_BYTES:
+        if len(raw) > MAX_JSON_BYTES:
             raise FavoritesError("favorites list exceeds the %d-byte limit" % MAX_JSON_BYTES)
         try:
             value = json.loads(data)
-        except Exception as exc:
+        except (TypeError, ValueError) as exc:
             raise FavoritesError("favorites file is not valid JSON") from exc
         if not isinstance(value, list):
             raise FavoritesError("favorites file is not a JSON list")
-        return [anchor for anchor in value if isinstance(anchor, str)]
+        if len(value) > MAX_ENTRIES:
+            raise FavoritesError("favorites list exceeds the %d-entry limit" % MAX_ENTRIES)
+        result = []
+        seen = set()
+        for item in value:
+            if not isinstance(item, str):
+                raise FavoritesError("favorites file contains a non-string entry")
+            anchor = self._clean(item)
+            if anchor in seen:
+                raise FavoritesError("favorites file contains duplicate entries")
+            seen.add(anchor)
+            result.append(anchor)
+        return result
 
-    # -- writes -----------------------------------------------------------
-
-    def add(self, reference: str) -> list:
+    def add(self, reference: str, current=None) -> list:
         ref = self._clean(reference)
-        anchors = [ref] + [a for a in self.list() if a != ref]
-        self._write(anchors[:MAX_ENTRIES])
-        return anchors[:MAX_ENTRIES]
+        existing = self._validated_current(current)
+        anchors = [ref] + [anchor for anchor in existing if anchor != ref]
+        anchors = anchors[:MAX_ENTRIES]
+        self._write(anchors)
+        return anchors
 
-    def remove(self, reference: str) -> list:
+    def remove(self, reference: str, current=None) -> list:
         ref = self._clean(reference)
-        anchors = [a for a in self.list() if a != ref]
+        existing = self._validated_current(current)
+        anchors = [anchor for anchor in existing if anchor != ref]
         self._write(anchors)
         return anchors
 
@@ -80,83 +83,111 @@ class FavoritesStore:
         self._write([])
         return []
 
-    # -- internals --------------------------------------------------------
+    def _validated_current(self, current) -> list:
+        if current is None:
+            return self.list()
+        if not isinstance(current, (list, tuple)) or len(current) > MAX_ENTRIES:
+            raise FavoritesError("favorites state exceeds the entry limit")
+        result = []
+        seen = set()
+        for item in current:
+            if not isinstance(item, str):
+                raise FavoritesError("favorites state contains a non-string entry")
+            anchor = self._clean(item)
+            if anchor in seen:
+                raise FavoritesError("favorites state contains duplicate entries")
+            seen.add(anchor)
+            result.append(anchor)
+        return result
 
     @staticmethod
     def _clean(reference: str) -> str:
-        anchor = str(reference or "").strip()
+        anchor = references.normalize_reference(reference)
         if not anchor:
-            raise FavoritesError("no reference provided")
-        if len(anchor) > MAX_ANCHOR_BYTES:
+            raise FavoritesError("reference must look like John 3:16")
+        if len(anchor.encode("utf-8")) > MAX_ANCHOR_BYTES:
             raise FavoritesError("reference exceeds the %d-byte limit" % MAX_ANCHOR_BYTES)
-        if any(ord(c) < 32 for c in anchor):
-            raise FavoritesError("reference contains control characters")
         return anchor
 
     def _write(self, anchors: list) -> None:
         self.ensure_dir()
-        payload = (json.dumps(anchors, ensure_ascii=True) + "\n").encode("utf-8")
+        payload = (json.dumps(anchors, ensure_ascii=True, separators=(",", ":")) + "\n").encode("utf-8")
         if len(payload) > MAX_JSON_BYTES:
             raise FavoritesError("favorites list exceeds the %d-byte limit" % MAX_JSON_BYTES)
-
-        import tempfile
-
-        tmp_name = None
+        tmp_name = ""
         tmp_fh = None
         try:
             fd, tmp_name = tempfile.mkstemp(prefix=".favorites.", suffix=".tmp", dir=self._dir)
+            if hasattr(os, "fchmod"):
+                os.fchmod(fd, stat.S_IRUSR | stat.S_IWUSR)
             tmp_fh = os.fdopen(fd, "wb", closefd=True)
             tmp_fh.write(payload)
             tmp_fh.flush()
             os.fsync(tmp_fh.fileno())
             tmp_fh.close()
             tmp_fh = None
-
             with open(tmp_name, "rb") as check:
                 st = os.fstat(check.fileno())
-                if not stat.S_ISREG(st.st_mode):
-                    raise FavoritesError("temporary favorites file is not a regular file")
-                if st.st_size != len(payload):
-                    raise FavoritesError("temporary favorites file size mismatch")
+                if not stat.S_ISREG(st.st_mode) or st.st_size != len(payload):
+                    raise FavoritesError("temporary favorites file verification failed")
                 check.seek(0)
                 if check.read(len(payload)) != payload:
-                    raise FavoritesError("temporary favorites file content mismatch")
-
+                    raise FavoritesError("temporary favorites file verification failed")
             os.replace(tmp_name, self._path)
-            tmp_name = None
+            tmp_name = ""
+            self._fsync_directory()
+        except (OSError, FavoritesError) as exc:
+            if isinstance(exc, FavoritesError):
+                raise
+            raise FavoritesError("favorites file write failed: %s" % exc) from exc
         finally:
             if tmp_fh is not None:
                 try:
                     tmp_fh.close()
-                except Exception:
+                except OSError:
                     pass
-            if tmp_name is not None:
+            if tmp_name:
                 try:
                     os.unlink(tmp_name)
-                except FileNotFoundError:
+                except OSError:
                     pass
+
+    def _fsync_directory(self) -> None:
+        if os.name == "nt":
+            return
+        flags = getattr(os, "O_DIRECTORY", 0) | os.O_RDONLY
+        try:
+            fd = os.open(self._dir, flags)
+        except OSError:
+            return
+        try:
+            os.fsync(fd)
+        except OSError:
+            pass
+        finally:
+            os.close(fd)
 
 
 def main(argv=None) -> int:
-    """CLI mirror of the Omarchy helper (`list|add|remove|clear`), mainly for dev use."""
     argv = sys.argv[1:] if argv is None else argv
     data_dir = os.environ.get("SCRIPTURE_DATA_DIR", "")
     if not data_dir:
         print("SCRIPTURE_DATA_DIR must point at the data folder", file=sys.stderr)
         return 2
     store = FavoritesStore(data_dir)
-    store.ensure_dir()
-    if not argv:
-        print("usage: favorites.py {list|add|remove|clear} [reference]", file=sys.stderr)
-        return 2
-    op = argv[0]
     try:
+        store.ensure_dir()
+        if not argv:
+            print("usage: favorites.py {list|add|remove|clear} [reference]", file=sys.stderr)
+            return 2
+        op = argv[0]
         if op == "list":
             print(json.dumps(store.list(), ensure_ascii=True))
-        elif op == "add":
-            print("ok" if store.add(argv[1]) else "ok")
-        elif op == "remove":
-            print("ok" if store.remove(argv[1]) else "ok")
+        elif op in ("add", "remove"):
+            if len(argv) != 2:
+                raise FavoritesError("a reference is required")
+            result = store.add(argv[1]) if op == "add" else store.remove(argv[1])
+            print("ok" if result is not None else "ok")
         elif op == "clear":
             store.clear()
             print("ok")

@@ -35,6 +35,7 @@ Item {
 
         Text {
             text: "A free api.esv.org key enables the English Standard Version. " +
+                  "The key is stored in protected local storage and never logged. " +
                   "Without one the ESV falls back to the World English Bible."
             color: "#9aa0a6"
             font.family: "Segoe UI"
@@ -48,12 +49,13 @@ Item {
             Layout.fillWidth: true
             placeholderText: "Paste your ESV API key (optional)"
             echoMode: TextInput.Password
+            maximumLength: 512
         }
 
         Rectangle {
             Layout.fillWidth: true
             Layout.topMargin: 4
-            height: 1
+            Layout.preferredHeight: 1
             color: "#2a2f35"
         }
 
@@ -97,6 +99,7 @@ Item {
                 id: fixedField
                 Layout.preferredWidth: 150
                 placeholderText: "e.g. John 3:16"
+                maximumLength: 120
             }
         }
 
@@ -138,7 +141,7 @@ Item {
         Rectangle {
             Layout.fillWidth: true
             Layout.topMargin: 4
-            height: 1
+            Layout.preferredHeight: 1
             color: "#2a2f35"
         }
 

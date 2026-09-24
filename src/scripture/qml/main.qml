@@ -173,7 +173,7 @@ Window {
 
                     // A — translation name
                     Text {
-                        Layout.fillWidth: true
+                        Layout.alignment: Qt.AlignHCenter
                         visible: App.translationLabel !== ""
                         text: App.translationLabel
                         color: Qt.rgba(1, 1, 1, 0.55)
@@ -183,6 +183,19 @@ Window {
                         font.letterSpacing: 2
                         horizontalAlignment: Text.AlignHCenter
                     }
+
+                    Text {
+                        Layout.alignment: Qt.AlignHCenter
+                        visible: App.translationAttribution !== ""
+                        textFormat: Text.PlainText
+                        text: App.translationAttribution
+                        color: Qt.rgba(1, 1, 1, 0.45)
+                        font.family: "Segoe UI"
+                        font.pixelSize: 9
+                        wrapMode: Text.Wrap
+                        horizontalAlignment: Text.AlignHCenter
+                    }
+
 
                     // B — verse text with typewriter reveal (rich text)
                     Text {
@@ -351,8 +364,8 @@ Window {
                         }
 
                         Rectangle {
-                            width: 240
-                            height: 34
+                            Layout.preferredWidth: 240
+                            Layout.preferredHeight: 34
                             radius: 6
                             color: Qt.rgba(1, 1, 1, 0.12)
                             border.color: Qt.rgba(1, 1, 1, 0.35)
@@ -367,6 +380,7 @@ Window {
                                 font.family: "Segoe UI"
                                 font.pixelSize: 11
                                 selectByMouse: true
+                                maximumLength: 120
                                 onAccepted: {
                                     App.load_reference(text)
                                     text = ""

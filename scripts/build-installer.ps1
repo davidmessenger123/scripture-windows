@@ -1,25 +1,37 @@
 # Build dist\Scripture.exe (PyInstaller) then an Inno Setup installer.
 # Run from the repository root in a PowerShell prompt on Windows.
 #
-#   .\scripts\build-installer.ps1                 # version defaults to 0.1.0
-#   .\scripts\build-installer.ps1 -AppVersion 1.0.0
+#   .\scripts\build-installer.ps1                 # version defaults to VERSION
+#   .\scripts\build-installer.ps1 -AppVersion <VERSION>  # must match VERSION
 #
 # Prerequisites:
-#   * Python 3.9+  (python must be on PATH)
+#   * Python 3.10+  (python must be on PATH)
 #   * Inno Setup 6 (https://jrsoftware.org/isinfo.php)
 #
-param([string]$AppVersion = "0.1.0")
+param([string]$AppVersion = "")
+$ErrorActionPreference = "Stop"
+
+$sourceVersion = (Get-Content -LiteralPath "src\scripture\VERSION" -Raw).Trim()
+if ($sourceVersion -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
+    throw "src\scripture\VERSION must be a semantic version"
+}
+if ([string]::IsNullOrWhiteSpace($AppVersion)) {
+    $AppVersion = $sourceVersion
+} elseif ($AppVersion -ne $sourceVersion) {
+    throw "AppVersion must match src\scripture\VERSION"
+}
 
 Write-Host "=== Scripture installer build v$AppVersion ===" -ForegroundColor Cyan
 
 # -- Step 1: ensure icon exists ------------------------------------------
-Write-Host "`n[1/4] Installing Python dependencies..."
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt pyinstaller
-if ($LASTEXITCODE -ne 0) { throw "pip install failed" }
+Write-Host "`n[1/5] Installing Python dependencies..."
+python -m pip install --disable-pip-version-check -r requirements-build.txt
+if ($LASTEXITCODE -ne 0) { throw "dependency install failed" }
+python -m pip install --disable-pip-version-check --no-deps -e .
+if ($LASTEXITCODE -ne 0) { throw "editable install failed" }
 
 # -- Step 2: ensure icon exists ------------------------------------------
-Write-Host "`n[2/4] Generating app icon..."
+Write-Host "`n[2/5] Generating app icon..."
 if (-not (Test-Path "assets\app.ico")) {
     python scripts\make_icon.py
     if ($LASTEXITCODE -ne 0) { throw "make_icon.py failed" }
@@ -28,14 +40,14 @@ if (-not (Test-Path "assets\app.ico")) {
 }
 
 # -- Step 3: build onefile exe -------------------------------------------
-Write-Host "`n[3/4] Building dist\Scripture.exe (PyInstaller)..."
+Write-Host "`n[3/5] Building dist\Scripture.exe (PyInstaller)..."
 python -m PyInstaller --noconfirm --clean Scripture.spec
 
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
 Write-Host "  dist\Scripture.exe built."
 
 # -- Step 4: locate Inno Setup 6 -----------------------------------------
-Write-Host "`n[4/4] Locating Inno Setup 6..."
+Write-Host "`n[4/5] Locating Inno Setup 6..."
 $isccPaths = @(
     "${env:ProgramFiles}\Inno Setup 6\ISCC.exe",
     "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",

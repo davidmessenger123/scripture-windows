@@ -12,7 +12,6 @@
 # Scripture.spec: the same QML allowlist hook and the same Qt exclusions.
 
 import os
-import re
 
 APP_NAME = "Scripture"
 BUNDLE_IDENTIFIER = "com.davidjm.scripture"
@@ -20,18 +19,16 @@ ASSETS_DIR = "assets"
 
 
 def _current_version() -> str:
-    """Read src/scripture/__init__.py for __version__ without importing it."""
-    init = os.path.join("src", "scripture", "__init__.py")
-    with open(init, encoding="utf-8") as fh:
-        m = re.search(r'__version__\s*=\s*"([^"]+)"', fh.read())
-    return m.group(1) if m else "0.0.0"
+    version_path = os.path.join("src", "scripture", "VERSION")
+    with open(version_path, encoding="ascii") as fh:
+        return fh.read().strip()
 
 
 a = Analysis(
     ["src/scripture/__main__.py"],
     pathex=["src"],
     binaries=[],
-    datas=[("src/scripture/qml", "scripture/qml")],
+    datas=[("src/scripture/qml", "scripture/qml"), ("src/scripture/VERSION", "scripture")],
     hiddenimports=["PySide6.QtQml"],
     hookspath=["packaging/pyinstaller"],
     hooksconfig={},

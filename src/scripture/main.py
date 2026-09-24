@@ -10,7 +10,9 @@ headless load test (`QT_QPA_PLATFORM=offscreen`).
 
 import os
 import sys
+import tempfile
 import traceback
+from datetime import datetime, timezone
 from pathlib import Path
 
 from PySide6.QtCore import QMetaObject, QStandardPaths, QTimer, QUrl, Qt
@@ -21,28 +23,45 @@ from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from . import __version__
 from .controller import AppController
-from .updater import UpdateChecker
+from .single_instance import SingleInstance
+from .updater import UpdateChecker, cleanup_stale_update_helpers, recover_interrupted_update, run_update_helper
+
+
+STARTUP_LOG_NAME = "startup-error.log"
+STARTUP_LOG_MAX_BYTES = 1024 * 1024
+STARTUP_LOG_BACKUPS = 3
+
+
+def _rotate_startup_log(path: Path) -> None:
+    try:
+        if path.stat().st_size < STARTUP_LOG_MAX_BYTES:
+            return
+        oldest = Path(str(path) + "." + str(STARTUP_LOG_BACKUPS))
+        if oldest.exists():
+            oldest.unlink()
+        for index in range(STARTUP_LOG_BACKUPS - 1, 0, -1):
+            source = Path(str(path) + "." + str(index))
+            if source.exists():
+                os.replace(source, Path(str(path) + "." + str(index + 1)))
+        os.replace(path, Path(str(path) + ".1"))
+    except OSError:
+        pass
 
 
 def _startup_log(message: str) -> None:
-    """Record startup failures somewhere visible even without a console.
-
-    The frozen (windowed) Windows exe has no stderr, so a QML load failure or
-    an early exception would otherwise look exactly like the reported bug: the
-    onefile parent+child enter Task Manager and then vanish silently. Log to
-    the same AppData dir the rest of the app uses (C:/Users/<u>/AppData/Roaming/
-    davidjm/scripture/startup-error.log) so a failed exe leaves a trail.
-    """
     if not getattr(sys, "frozen", False):
         print(message, file=sys.stderr)
         return
     try:
         base = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation)
-        if base:
-            path = Path(base) / "startup-error.log"
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with open(path, "a", encoding="utf-8") as fh:
-                fh.write(message.rstrip() + "\n")
+        if not base:
+            return
+        path = Path(base) / STARTUP_LOG_NAME
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _rotate_startup_log(path)
+        stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write("[%s] %s\n" % (stamp, str(message).rstrip()))
     except OSError:
         pass
 
@@ -107,8 +126,12 @@ def _engine_errors_capture(engine):
     return lambda: ":\n" + "\n".join(captured) if captured else ""
 
 
-def _qml_message_capture(ctx=None):
-    """Return a list that a Qt message handler appends all messages to."""
+def _qml_message_capture():
+    """Install a Qt message handler that captures QML messages during load.
+
+    Returns (buf, uninstall) where uninstall restores the previous handler.
+    Call uninstall after engine.load so messages do not accumulate forever.
+    """
     buf = []
 
     def handler(mode, context, message):
@@ -121,8 +144,12 @@ def _qml_message_capture(ctx=None):
 
     from PySide6.QtCore import qInstallMessageHandler
 
-    qInstallMessageHandler(handler)
-    return buf
+    previous = qInstallMessageHandler(handler)
+
+    def uninstall():
+        qInstallMessageHandler(previous)
+
+    return buf, uninstall
 
 
 def _bundled_qml_modules() -> str:
@@ -155,9 +182,33 @@ def _qml_import_probe(engine, qml_file) -> str:
     return "\n".join(lines)
 
 
-def main(argv=None) -> int:
+def _safe_cleanup_path(path: str) -> bool:
     try:
-        return _run(argv)
+        candidate = Path(path).resolve()
+        root = Path(tempfile.gettempdir()).resolve()
+        return candidate.parent.parent == root and candidate.parent.name.startswith("scripture-update-helper-")
+    except OSError:
+        return False
+
+
+def _remove_file(path: str) -> None:
+    try:
+        Path(path).unlink()
+    except OSError:
+        pass
+    if _safe_cleanup_path(path):
+        try:
+            Path(path).parent.rmdir()
+        except OSError:
+            pass
+
+
+def main(argv=None) -> int:
+    args = list(argv if argv is not None else sys.argv[1:])
+    if args and args[0] == "--scripture-apply-update":
+        return run_update_helper(args[1:])
+    try:
+        return _run(args)
     except Exception:
         _startup_log(
             "Unhandled exception in main():\n" + traceback.format_exc()
@@ -169,6 +220,12 @@ def main(argv=None) -> int:
 
 def _run(argv=None) -> int:
     argv = list(argv if argv is not None else sys.argv[1:])
+    if getattr(sys, "frozen", False) and os.name == "nt" and not recover_interrupted_update(os.path.abspath(sys.executable)):
+        _startup_log("automatic update recovery could not safely resolve the replacement journal")
+    cleanup_helper = ""
+    if len(argv) >= 2 and argv[0] == "--scripture-cleanup-helper":
+        cleanup_helper = argv[1]
+        argv = argv[2:]
     smoke = "--smoke" in argv
     app_args = [a for a in sys.argv[:1] + [x for x in argv if x != "--smoke"]]
     if smoke and "offscreen" not in " ".join(app_args):
@@ -185,8 +242,16 @@ def _run(argv=None) -> int:
     app.setApplicationName("Scripture")
     app.setOrganizationName("davidjm")
     app.setQuitOnLastWindowClosed(False)
+    if cleanup_helper and _safe_cleanup_path(cleanup_helper):
+        QTimer.singleShot(5000, lambda: _remove_file(cleanup_helper))
+    cleanup_stale_update_helpers()
+    instance_key = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation) or str(Path.home())
+    instance = SingleInstance(instance_key, app)
+    if not instance.acquire():
+        return 0
 
     controller = AppController()
+    instance.showRequested.connect(lambda: setattr(controller, "overlayOpen", True))
 
     # Expose the controller as the QML singleton `ScriptureRT.App` rather than a
     # context property. Context properties are not reliably visible inside
@@ -196,11 +261,14 @@ def _run(argv=None) -> int:
     checker = UpdateChecker(__version__, app)
     qmlRegisterSingletonInstance(UpdateChecker, "ScriptureRT", 1, 0, "Updater", checker)
 
-    qml_messages = _qml_message_capture()
+    qml_messages, uninstall_qml_messages = _qml_message_capture()
     engine = QQmlApplicationEngine()
     qml_warnings = _engine_errors_capture(engine)
     qml_file = Path(__file__).parent / "qml" / "main.qml"
-    engine.load(QUrl.fromLocalFile(str(qml_file)))
+    try:
+        engine.load(QUrl.fromLocalFile(str(qml_file)))
+    finally:
+        uninstall_qml_messages()
     if not engine.rootObjects():
         _startup_log(
             "failed to load main.qml"
@@ -211,33 +279,49 @@ def _run(argv=None) -> int:
         )
         return 1
 
-    settings_view = SettingsView(controller, engine)
-    if settings_view.rootObject() is None:
-        _startup_log("failed to load settings.qml" + _engine_errors(engine))
-        return 1
+    # Lazy: create the settings window on first open, not at startup.
+    settings_view = {"view": None}
+
+    def _ensure_settings_view():
+        view = settings_view["view"]
+        if view is not None:
+            return view
+        view = SettingsView(controller, engine)
+        if view.rootObject() is None:
+            _startup_log("failed to load settings.qml" + qml_warnings())
+            return None
+        settings_view["view"] = view
+        return view
 
     def _sync_settings_view() -> None:
         if controller.settingsOpen:
-            screen = settings_view.screen()
+            view = _ensure_settings_view()
+            if view is None:
+                controller.settingsOpen = False
+                return
+            screen = view.screen()
             geo = screen.availableGeometry() if screen is not None else None
             if geo is not None:
-                settings_view.setPosition(
-                    geo.center().x() - settings_view.width() // 2,
-                    geo.center().y() - settings_view.height() // 2,
+                view.setPosition(
+                    geo.center().x() - view.width() // 2,
+                    geo.center().y() - view.height() // 2,
                 )
-            settings_view.show()
-            settings_view.raise_()
-            root = settings_view.rootObject()
+            view.show()
+            view.raise_()
+            root = view.rootObject()
             if root is not None:
                 QMetaObject.invokeMethod(root, "seedSettings")
         else:
-            settings_view.hide()
+            view = settings_view["view"]
+            if view is not None:
+                view.hide()
 
     controller.settingsChanged.connect(_sync_settings_view)
 
     def _raise_settings_with_overlay() -> None:
-        if controller.settingsOpen:
-            settings_view.raise_()
+        view = settings_view["view"]
+        if view is not None and controller.settingsOpen:
+            view.raise_()
 
     controller.overlayChanged.connect(_raise_settings_with_overlay)
 

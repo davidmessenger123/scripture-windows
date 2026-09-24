@@ -16,8 +16,8 @@ You don't need Python or any tools. Download a prebuilt installer from the
 
 1. Open **`Scripture-Setup-<version>.exe`** and click **Next → Next → Install**.
    It installs per-user (no admin password) and adds a Start-menu entry.
-2. If Windows shows **"Windows protected your PC"**, the app is unsigned (that
-   is normal for indie software): click **More info → Run anyway**.
+2. Published installers and portable builds are Authenticode-signed and
+   timestamped. Do not bypass Windows signature warnings.
 3. Look for the **gold cross ** in the system tray, right-click it, and choose
    **Open Scripture**.
 
@@ -28,10 +28,12 @@ signup.
 
 Updates are checked automatically: when a newer release is available the tray
 shows a notification and the overlay adds an “Update available: vX.Y.Z —
-Download” chip. Clicking either downloads the new version and Scripture
-restarts itself automatically (the running installer-less exe is swapped in
-place) — no need to reinstall from the Releases page. The chip also keeps an
-“Open browser” fallback. The check is silent and skipped in development builds
+Download” chip. Automatic Windows replacement additionally requires a valid
+Authenticode signature on both the installed and downloaded executables. The
+full publisher subject and signing-certificate thumbprint must both match.
+Unsigned or differently signed builds always fall back to the release page. Hash/size, trusted GitHub origins, redirects,
+and a durable replacement journal are also enforced. macOS uses the same
+release-page fallback. The check is silent and skipped in development builds
 (set `SCRIPTURE_FORCE_UPDATE_CHECK=1` to enable it).
 
 ## Features
@@ -51,12 +53,14 @@ place) — no need to reinstall from the Releases page. The chip also keeps an
 
 ## Install & run (dev)
 
-Requires Python 3.9+.
+Requires Python 3.10+. The build and runtime dependency versions are pinned in
+`requirements.txt`, `requirements-build.txt`, and `pyproject.toml`.
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+pip install --no-deps -e .
 python -m scripture
 ```
 
@@ -64,6 +68,7 @@ Windows:
 
 ```sh
 pip install -r requirements.txt
+pip install --no-deps -e .
 python -m scripture --smoke   # optional headless load test
 ```
 
@@ -79,13 +84,16 @@ From the repo root in PowerShell:
 - `build.ps1` produces `dist\Scripture.exe` (works by itself, no install).
 - `build-installer.ps1` also compiles a per-user installer and needs
   [Inno Setup 6](https://jrsoftware.org/isinfo.php) installed.
-- Both embed the cross icon (`assets\app.ico`) and need Python 3.9+.
+- Both embed the cross icon (`assets\app.ico`) and need Python 3.10+.
 
-**Release automation:** push a tag (`git tag v0.1.0 && git push --tags`) and the
+**Release automation:** push a matching tag (`git tag vMAJOR.MINOR.PATCH && git push --tags`) and the
 [GitHub Actions workflow](.github/workflows/build-release.yml) builds both files
 on a Windows runner and attaches them to a GitHub Release automatically.
-Keep `src/scripture/__init__.py` (`__version__`) in step with the tag so the
-built-in update check never flags the app's own release.
+`src/scripture/VERSION` is the single release-version input. The package
+metadata, frozen bundle, installer workflow, and update comparison all derive
+from it; release tags must match its `MAJOR.MINOR.PATCH` value. The workflow
+fails closed unless the certificate, expected thumbprint, expected subject, and
+HTTPS timestamp URL are configured.
 
 ## Controls
 
@@ -101,11 +109,17 @@ built-in update check never flags the app's own release.
 
 ## Data & settings
 
-- Settings (ESV key, translation, fixed verse, auto-open): `QSettings` under
-  `HKCU\Software\davidjm\scripture` on Windows (no registry editing needed —
-  it is only ever touched by the app's Settings panel).
-- Favorites: `%APPDATA%\Scripture\favorites.json`, written atomically (temp
-  file + fsync + `os.replace`) exactly like the Omarchy plugin.
+- Settings (translation, fixed verse, auto-open): `QSettings` under
+  `HKCU\Software\davidjm\Scripture` on Windows. The ESV key is kept in a
+  separate owner-only file encrypted with Windows DPAPI (macOS uses Keychain);
+  it is never placed in
+  `QSettings`, logs, URLs, or update metadata.
+- Favorites: `%APPDATA%\davidjm\Scripture\favorites.json`, written atomically
+  (temp file + fsync + `os.replace`) and validated against a strict JSON schema.
+- A per-user local-server lock coordinates tray starts; a second launch signals
+  the existing window instead of creating a second updater or fetch loop.
+- Frozen startup failures are timestamped in `startup-error.log` and rotated to
+  three bounded backups.
 
 ## Development
 
@@ -115,10 +129,14 @@ src/scripture/
   controller.py    AppController QObject — state, fetch, reveal, favorites, auto-open
   fetcher.py       QNetworkAccessManager wrappers for api.esv.org and bible-api.com
   updater.py       GitHub release update check (tray balloon + in-app chip)
+  secrets.py       DPAPI/owner-only ESV key storage
+  single_instance.py per-user local-server coordination
   favorites.py     hardened atomic favorites store (port of favorites.py)
   references.py    curated deck + range/parse/rich-text helpers (port of Scripture.js)
+  VERSION          canonical release version
   qml/main.qml     overlay UI (plain Qt Quick, no Omarchy imports)
   qml/settings.qml settings dialog (own QQuickView top-level window)
+tests/                 focused Python unittest coverage
 ```
 
 The Omarchy plugin remains the upstream source of truth; when the two diverge,

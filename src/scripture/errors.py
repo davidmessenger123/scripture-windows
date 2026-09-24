@@ -1,0 +1,2 @@
+class SecretStoreError(RuntimeError):
+    pass

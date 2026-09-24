@@ -2,28 +2,70 @@ name: Build Windows installer
 
 on:
   push:
-    tags: ["v*"]
+    tags:
+      - "v[0-9]*.[0-9]*.[0-9]*"
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: windows-release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: windows-2022
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          python-version: "3.12"
+          persist-credentials: false
 
-      - name: Install Python deps
+      - name: Validate release ref and source version
+        id: version
+        shell: pwsh
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = "0.0.0"
+          if ($env:REF_TYPE -eq "tag") {
+            if ($env:REF_NAME -notmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
+              throw "release tag must be vMAJOR.MINOR.PATCH"
+            }
+            $version = $env:REF_NAME.Substring(1)
+            $sourceVersion = (Get-Content -LiteralPath "src/scripture/VERSION" -Raw).Trim()
+            if ($version -ne $sourceVersion) {
+              throw "tag version does not match src/scripture/VERSION"
+            }
+          }
+          "version=$version" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
+
+      - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38
+        with:
+          python-version: "3.12.10"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-build.txt
+            pyproject.toml
+
+      - name: Install pinned Python dependencies
         shell: pwsh
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e .
-          python -m pip install pyinstaller
+          $ErrorActionPreference = "Stop"
+          python -m pip install --disable-pip-version-check -r requirements-build.txt
+          python -m pip install --disable-pip-version-check --no-deps -e .
+          python -m pip check
+
+      - name: Run unit tests
+        shell: pwsh
+        run: python -m unittest discover -s tests -v
 
       - name: Headless smoke test
         shell: pwsh
@@ -33,111 +75,209 @@ jobs:
 
       - name: Build portable onefile exe
         shell: pwsh
-        run: python -m PyInstaller --noconfirm --clean Scripture.spec
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -m PyInstaller --noconfirm --clean Scripture.spec
 
-      - name: Smoke test the frozen exe (not just source)
+      - name: Smoke test the frozen exe
         shell: pwsh
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          function Dump-Log([string]$path) {
-            Write-Host "===== startup-error.log ====="
-            Write-Host (Get-Content -LiteralPath $path -Raw)
-            Write-Host "===== end ====="
-          }
+          $ErrorActionPreference = "Stop"
+          $log = Join-Path (Join-Path $env:APPDATA 'davidjm') 'Scripture\startup-error.log'
+          Remove-Item -LiteralPath $log -Force -ErrorAction SilentlyContinue
           $p = Start-Process -FilePath dist\Scripture.exe -ArgumentList '--smoke' -PassThru
           $deadline = (Get-Date).AddSeconds(20)
           while (-not $p.HasExited -and (Get-Date) -lt $deadline) {
             Start-Sleep -Milliseconds 500
-            if ($p.HasExited) { break }
           }
           if (-not $p.HasExited) {
             Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
-            $log = Join-Path (Join-Path $env:APPDATA 'davidjm') 'scripture\startup-error.log'
-            if (Test-Path $log) { Dump-Log $log }
-            throw "frozen exe smoke test did not exit within 20s (windowed traceback dialog? crash?)"
+            if (Test-Path $log) { Get-Content -LiteralPath $log -Raw }
+            throw "frozen exe smoke test did not exit within 20 seconds"
           }
-          $code = $p.ExitCode
-          if ($code -ne 0) {
-            $log = Join-Path (Join-Path $env:APPDATA 'davidjm') 'scripture\startup-error.log'
-            if (Test-Path $log) { Dump-Log $log }
-            throw "frozen exe smoke test failed with exit code $code"
+          if ($p.ExitCode -ne 0) {
+            if (Test-Path $log) { Get-Content -LiteralPath $log -Raw }
+            throw "frozen exe smoke test failed with exit code $($p.ExitCode)"
           }
+          if (Test-Path $log) { throw "startup-error.log was written during smoke test" }
 
-      - name: Boot check (update check path, 12 s)
+      - name: Boot check
         shell: pwsh
         env:
           QT_QPA_PLATFORM: offscreen
           SCRIPTURE_FORCE_UPDATE_CHECK: "1"
         run: |
-          function Dump-Log([string]$path) {
-            Write-Host "===== startup-error.log ====="
-            Write-Host (Get-Content -LiteralPath $path -Raw)
-            Write-Host "===== end ====="
-          }
+          $ErrorActionPreference = "Stop"
+          $log = Join-Path (Join-Path $env:APPDATA 'davidjm') 'Scripture\startup-error.log'
+          Remove-Item -LiteralPath $log -Force -ErrorAction SilentlyContinue
           $p = Start-Process -FilePath dist\Scripture.exe -PassThru
           Start-Sleep -Seconds 12
-          $log = Join-Path (Join-Path $env:APPDATA 'davidjm') 'scripture\startup-error.log'
           if ($p.HasExited) {
-            if (Test-Path $log) { Dump-Log $log }
-            throw "Scripture.exe exited on its own after startup (exit code $($p.ExitCode))"
+            if (Test-Path $log) { Get-Content -LiteralPath $log -Raw }
+            throw "Scripture.exe exited on its own after startup"
           }
           if (Test-Path $log) {
-            $err = Get-Content $log -Raw
-            if ($err -and (Get-Item $log).LastWriteTime -gt (Get-Date).AddSeconds(-15)) {
-              Dump-Log $log
-              Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
-              throw "startup-error.log was written during the boot check"
-            }
+            Get-Content -LiteralPath $log -Raw
+            Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+            throw "startup-error.log was written during the boot check"
           }
-          Stop-Process -Id $p.Id
+          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+
+      - name: Sign portable executable
+        shell: pwsh
+        env:
+          WINDOWS_SIGNING_CERTIFICATE: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
+          WINDOWS_SIGNING_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
+          WINDOWS_SIGNING_THUMBPRINT: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_THUMBPRINT }}
+          WINDOWS_SIGNING_PUBLISHER: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_SUBJECT }}
+          WINDOWS_TIMESTAMP_URL: ${{ vars.WINDOWS_TIMESTAMP_URL }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          foreach ($name in @("WINDOWS_SIGNING_CERTIFICATE", "WINDOWS_SIGNING_PASSWORD", "WINDOWS_SIGNING_THUMBPRINT", "WINDOWS_SIGNING_PUBLISHER", "WINDOWS_TIMESTAMP_URL")) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) { throw "missing required signing setting: $name" }
+          }
+          $expectedThumbprint = ($env:WINDOWS_SIGNING_THUMBPRINT -replace '[^0-9A-Fa-f]', '').ToUpperInvariant()
+          if ($expectedThumbprint -notmatch '^[0-9A-F]{40}$') { throw "invalid signing certificate thumbprint" }
+          $timestamp = [uri]$env:WINDOWS_TIMESTAMP_URL
+          if (-not $timestamp.IsAbsoluteUri -or $timestamp.Scheme -ne "https" -or [string]::IsNullOrWhiteSpace($timestamp.Host) -or $timestamp.UserInfo) { throw "timestamp URL must be an absolute HTTPS URL" }
+          $signtool = Get-ChildItem -Path "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe", "${env:ProgramFiles}\Windows Kits\10\bin\*\x64\signtool.exe" -ErrorAction SilentlyContinue | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $signtool) { throw "signtool.exe not found" }
+          $pfxPath = Join-Path $env:RUNNER_TEMP "scripture-signing.pfx"
+          $imported = @()
+          try {
+            $certificateBytes = [Convert]::FromBase64String(($env:WINDOWS_SIGNING_CERTIFICATE -replace '\s', ''))
+            [IO.File]::WriteAllBytes($pfxPath, $certificateBytes)
+            $password = ConvertTo-SecureString $env:WINDOWS_SIGNING_PASSWORD -AsPlainText -Force
+            $imported = @(Import-PfxCertificate -FilePath $pfxPath -CertStoreLocation Cert:\CurrentUser\My -Password $password)
+            $certificates = @($imported | Where-Object { $_.HasPrivateKey -and $_.Thumbprint -eq $expectedThumbprint -and $_.Subject -ceq $env:WINDOWS_SIGNING_PUBLISHER -and $_.NotAfter -gt (Get-Date) })
+            if ($certificates.Count -ne 1) { throw "signing certificate identity, private key, subject, or validity check failed" }
+            $certificate = $certificates[0]
+            $file = (Resolve-Path -LiteralPath "dist\Scripture.exe").Path
+            $signArguments = @("sign", "/fd", "SHA256", "/td", "SHA256", "/tr", $timestamp.AbsoluteUri, "/sha1", $certificate.Thumbprint, $file)
+            & $signtool.FullName @signArguments
+            if ($LASTEXITCODE -ne 0) { throw "signtool failed to sign Scripture.exe" }
+            & $signtool.FullName verify /pa /all $file
+            if ($LASTEXITCODE -ne 0) { throw "signtool failed to verify Scripture.exe" }
+            $signature = Get-AuthenticodeSignature -LiteralPath $file
+            if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or $signature.SignerCertificate.Thumbprint -ne $expectedThumbprint -or $signature.SignerCertificate.Subject -cne $env:WINDOWS_SIGNING_PUBLISHER) { throw "Authenticode validation failed for Scripture.exe" }
+          } finally {
+            foreach ($certificate in $imported) { Remove-Item -LiteralPath ("Cert:\CurrentUser\My\" + $certificate.Thumbprint) -Force -ErrorAction SilentlyContinue }
+            Remove-Item -LiteralPath $pfxPath -Force -ErrorAction SilentlyContinue
+          }
 
       - name: Install Inno Setup
         shell: pwsh
-        run: choco install innosetup -y --no-progress
+        run: choco install innosetup --version=6.3.2 -y --no-progress
 
-      - name: Compute version
-        id: version
-        shell: pwsh
-        run: |
-          if ($env:GITHUB_REF_TYPE -eq 'tag') {
-            $v = $env:GITHUB_REF_NAME -replace '^v',''
-          } else {
-            $v = '0.1.0-ci'
-          }
-          "version=$v" >> $env:GITHUB_OUTPUT
-
-      - name: Build installer with Inno Setup
-        shell: pwsh
-        run: |
-          $iscc = (Get-ChildItem 'C:\Program Files*\Inno Setup 6\ISCC.exe' -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
-          if (-not $iscc) { throw "ISCC.exe not found" }
-          & $iscc "/DAppVersion=${{ steps.version.outputs.version }}" installer\scripture.iss
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: scripture-windows
-          path: |
-            dist\Scripture.exe
-            dist\Scripture-Setup-*.exe
-
-      - name: Publish GitHub Release (tag push only)
-        if: github.ref_type == 'tag'
+      - name: Build installer
         shell: pwsh
         env:
-          GH_TOKEN: ${{ github.token }}
+          APP_VERSION: ${{ steps.version.outputs.version }}
         run: |
-          # The Windows and macOS workflows both run on a tag push, so either
-          # job may reach this step first: create the release only when it is
-          # missing, then upload (clobbering any partial upload from the other).
-          gh release view "$env:GITHUB_REF_NAME" *> $null
-          if ($LASTEXITCODE -ne 0) {
-            gh release create "$env:GITHUB_REF_NAME" `
-              --title "Scripture $env:GITHUB_REF_NAME" `
-              --generate-notes
+          $ErrorActionPreference = "Stop"
+          $iscc = (Get-ChildItem 'C:\Program Files*\Inno Setup 6\ISCC.exe' -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
+          if (-not $iscc) { throw "ISCC.exe not found" }
+          & $iscc "/DAppVersion=$env:APP_VERSION" "installer\scripture.iss"
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
+
+      - name: Sign installer
+        shell: pwsh
+        env:
+          WINDOWS_SIGNING_CERTIFICATE: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
+          WINDOWS_SIGNING_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
+          WINDOWS_SIGNING_THUMBPRINT: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_THUMBPRINT }}
+          WINDOWS_SIGNING_PUBLISHER: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_SUBJECT }}
+          WINDOWS_TIMESTAMP_URL: ${{ vars.WINDOWS_TIMESTAMP_URL }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          foreach ($name in @("WINDOWS_SIGNING_CERTIFICATE", "WINDOWS_SIGNING_PASSWORD", "WINDOWS_SIGNING_THUMBPRINT", "WINDOWS_SIGNING_PUBLISHER", "WINDOWS_TIMESTAMP_URL")) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) { throw "missing required signing setting: $name" }
           }
-          gh release upload "$env:GITHUB_REF_NAME" `
-            "dist\Scripture.exe" `
-            "dist\Scripture-Setup-${{ steps.version.outputs.version }}.exe" `
+          $expectedThumbprint = ($env:WINDOWS_SIGNING_THUMBPRINT -replace '[^0-9A-Fa-f]', '').ToUpperInvariant()
+          if ($expectedThumbprint -notmatch '^[0-9A-F]{40}$') { throw "invalid signing certificate thumbprint" }
+          $timestamp = [uri]$env:WINDOWS_TIMESTAMP_URL
+          if (-not $timestamp.IsAbsoluteUri -or $timestamp.Scheme -ne "https" -or [string]::IsNullOrWhiteSpace($timestamp.Host) -or $timestamp.UserInfo) { throw "timestamp URL must be an absolute HTTPS URL" }
+          $signtool = Get-ChildItem -Path "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe", "${env:ProgramFiles}\Windows Kits\10\bin\*\x64\signtool.exe" -ErrorAction SilentlyContinue | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $signtool) { throw "signtool.exe not found" }
+          $pfxPath = Join-Path $env:RUNNER_TEMP "scripture-signing.pfx"
+          $imported = @()
+          try {
+            $certificateBytes = [Convert]::FromBase64String(($env:WINDOWS_SIGNING_CERTIFICATE -replace '\s', ''))
+            [IO.File]::WriteAllBytes($pfxPath, $certificateBytes)
+            $password = ConvertTo-SecureString $env:WINDOWS_SIGNING_PASSWORD -AsPlainText -Force
+            $imported = @(Import-PfxCertificate -FilePath $pfxPath -CertStoreLocation Cert:\CurrentUser\My -Password $password)
+            $certificates = @($imported | Where-Object { $_.HasPrivateKey -and $_.Thumbprint -eq $expectedThumbprint -and $_.Subject -ceq $env:WINDOWS_SIGNING_PUBLISHER -and $_.NotAfter -gt (Get-Date) })
+            if ($certificates.Count -ne 1) { throw "signing certificate identity, private key, subject, or validity check failed" }
+            $certificate = $certificates[0]
+            $file = (Resolve-Path -LiteralPath "dist\Scripture-Setup-$env:APP_VERSION.exe").Path
+            $signArguments = @("sign", "/fd", "SHA256", "/td", "SHA256", "/tr", $timestamp.AbsoluteUri, "/sha1", $certificate.Thumbprint, $file)
+            & $signtool.FullName @signArguments
+            if ($LASTEXITCODE -ne 0) { throw "signtool failed to sign the installer" }
+            & $signtool.FullName verify /pa /all $file
+            if ($LASTEXITCODE -ne 0) { throw "signtool failed to verify the installer" }
+            $signature = Get-AuthenticodeSignature -LiteralPath $file
+            if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or $signature.SignerCertificate.Thumbprint -ne $expectedThumbprint -or $signature.SignerCertificate.Subject -cne $env:WINDOWS_SIGNING_PUBLISHER) { throw "Authenticode validation failed for the installer" }
+          } finally {
+            foreach ($certificate in $imported) { Remove-Item -LiteralPath ("Cert:\CurrentUser\My\" + $certificate.Thumbprint) -Force -ErrorAction SilentlyContinue }
+            Remove-Item -LiteralPath $pfxPath -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Generate SHA-256 sidecars
+        shell: pwsh
+        env:
+          APP_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $files = @("dist\Scripture.exe", "dist\Scripture-Setup-$env:APP_VERSION.exe")
+          foreach ($file in $files) {
+            if (-not (Test-Path -LiteralPath $file)) { throw "missing $file" }
+            $hash = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()
+            $sidecar = "$file.sha256"
+            "$hash  $(Split-Path -Leaf $file)" | Set-Content -LiteralPath $sidecar -Encoding ascii
+          }
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: scripture-windows
+          if-no-files-found: error
+          path: |
+            dist\Scripture.exe
+            dist\Scripture.exe.sha256
+            dist\Scripture-Setup-*.exe
+            dist\Scripture-Setup-*.exe.sha256
+
+  publish:
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: scripture-windows
+          path: release
+      - name: Publish GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then exit 1; fi
+          if [[ "$RELEASE_VERSION" != "${RELEASE_TAG#v}" ]]; then exit 1; fi
+          (cd release && sha256sum -c Scripture.exe.sha256 && sha256sum -c "Scripture-Setup-$RELEASE_VERSION.exe.sha256")
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --title "Scripture $RELEASE_TAG" --generate-notes || gh release view "$RELEASE_TAG" >/dev/null
+          fi
+          gh release upload "$RELEASE_TAG" \
+            "release/Scripture.exe" \
+            "release/Scripture.exe.sha256" \
+            "release/Scripture-Setup-$RELEASE_VERSION.exe" \
+            "release/Scripture-Setup-$RELEASE_VERSION.exe.sha256" \
             --clobber

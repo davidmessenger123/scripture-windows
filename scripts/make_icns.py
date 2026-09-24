@@ -11,6 +11,7 @@ on macOS (this only needs to run in CI / on a Mac):
     python scripts/make_icns.py
 """
 
+import os
 import shutil
 import subprocess
 import sys
@@ -79,13 +80,20 @@ def write_iconset() -> None:
 
 
 def run_iconutil() -> None:
-    if shutil.which("iconutil") is None:
+    iconutil = "/usr/bin/iconutil"
+    if not os.path.isfile(iconutil) or not os.access(iconutil, os.X_OK):
         raise RuntimeError(
             "iconutil not found; run this on macOS (CI runner or a Mac)"
         )
+    environment = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"}
+    for key in ("HOME", "TMPDIR"):
+        value = os.environ.get(key)
+        if value:
+            environment[key] = value
     subprocess.run(
-        ["iconutil", "-c", "icns", str(ICONSET), "-o", str(ICNS)],
+        [iconutil, "-c", "icns", str(ICONSET), "-o", str(ICNS)],
         check=True,
+        env=environment,
     )
 
 
