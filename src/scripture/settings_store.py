@@ -265,6 +265,8 @@ def migrate_legacy_api_keys(settings, legacy_settings, secret_store) -> tuple:
     except SecretStoreError as exc:
         error = "Settings: %s" % exc
     for source in (settings, legacy_settings):
+        if not source.contains("apiKey"):
+            continue
         legacy_value = str(source.value("apiKey", "") or "").strip()
         if not legacy_value:
             source.remove("apiKey")
