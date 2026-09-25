@@ -204,8 +204,25 @@ def _descriptor_owner_only_valid(descriptor, owner, dacl, local_free) -> bool:
             ctypes.byref(string_length),
         ):
             return False
-        expected = "D:P(A;;FA;;;%s)" % owner_string.value
-        return str(dacl_string.value or "") == expected
+        value = str(dacl_string.value or "")
+        if not value.startswith("D:P"):
+            return False
+        remainder = value[3:]
+        if remainder.startswith("AI"):
+            remainder = remainder[2:]
+        if not remainder.startswith("(") or not remainder.endswith(")"):
+            return False
+        ace_text = remainder[1:-1]
+        if "(" in ace_text or ")" in ace_text:
+            return False
+        fields = ace_text.split(";")
+        if len(fields) != 6:
+            return False
+        ace_type, ace_flags, access_mask, object_flags, inherited_flags, trustee = fields
+        if ace_type != "A" or ace_flags or access_mask.upper() != "FA" or object_flags or inherited_flags:
+            return False
+        owner_sid = str(owner_string.value or "").casefold()
+        return bool(owner_sid and trustee.casefold() == owner_sid)
     finally:
         if owner_string:
             local_free(owner_string)

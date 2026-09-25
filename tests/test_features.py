@@ -216,6 +216,15 @@ class SecurityPlatformTests(unittest.TestCase):
         self.assertIn(4, dictionary_sizes)
         self.assertIn(3, dictionary_sizes)
 
+    @unittest.skipUnless(os.name == "nt", "Windows-only integration test")
+    def test_windows_real_private_directory_and_committed_file_dacl(self):
+        with tempfile.TemporaryDirectory() as directory:
+            private = Path(directory) / "private"
+            create_owner_only_directory(private)
+            self.assertTrue(owner_only_dacl_valid(private))
+            committed = secure_files_module.secure_atomic_write_bytes(str(private / "card.bin"), b"card")
+            self.assertTrue(owner_only_dacl_valid(committed))
+
     def test_windows_library_loading_uses_system_directory(self):
         root = Path(__file__).parents[1] / "src" / "scripture"
         secure_source = (root / "secure_files.py").read_text(encoding="utf-8")
@@ -328,27 +337,32 @@ class SecurityPlatformTests(unittest.TestCase):
         free_descriptor.assert_called_once_with(descriptor)
         self.assertTrue(any(call[0] == "set_security_info" for call in calls if isinstance(call, tuple)))
         canonical = type("CanonicalAdvapi", (), {})()
+        canonical_dacl = ["D:P(A;;FA;;;S-1-5-21)"]
         canonical.ConvertSidToStringSidW = Function(lambda sid, text: setattr(text._obj, "value", "S-1-5-21") or 1)
         canonical.ConvertSecurityDescriptorToStringSecurityDescriptorW = Function(
-            lambda descriptor, info, revision, text, length: setattr(text._obj, "value", "D:P(A;;FA;;;S-1-5-21)") or 1
+            lambda descriptor, info, revision, text, length: setattr(text._obj, "value", canonical_dacl[0]) or 1
         )
         canonical_free = mock.Mock()
+        variants = (
+            ("D:P(A;;FA;;;S-1-5-21)", True),
+            ("D:PAI(A;;FA;;;S-1-5-21)", True),
+            ("D:P(A;;FA;;;s-1-5-21)", True),
+            ("D:(A;;FA;;;S-1-5-21)", False),
+            ("D:P(D;;FA;;;S-1-5-21)", False),
+            ("D:P(A;CI;FA;;;S-1-5-21)", False),
+            ("D:P(A;;FA;;;S-1-5-22)", False),
+            ("D:P(A;;FA;;;S-1-5-21)(A;;FA;;;S-1-5-22)", False),
+        )
         with mock.patch.object(secure_files_module, "windows_system_library", return_value=canonical):
-            self.assertTrue(
-                secure_files_module._descriptor_owner_only_valid(
-                    ctypes.c_void_p(1), ctypes.c_void_p(2), ctypes.c_void_p(3), canonical_free
+            for dacl, expected in variants:
+                canonical_dacl[0] = dacl
+                self.assertEqual(
+                    secure_files_module._descriptor_owner_only_valid(
+                        ctypes.c_void_p(1), ctypes.c_void_p(2), ctypes.c_void_p(3), canonical_free
+                    ),
+                    expected,
+                    dacl,
                 )
-            )
-            canonical.ConvertSecurityDescriptorToStringSecurityDescriptorW = Function(
-                lambda descriptor, info, revision, text, length: setattr(
-                    text._obj, "value", "D:P(A;;FA;;;S-1-5-21)(A;;FA;;;S-1-5-22)"
-                ) or 1
-            )
-            self.assertFalse(
-                secure_files_module._descriptor_owner_only_valid(
-                    ctypes.c_void_p(1), ctypes.c_void_p(2), ctypes.c_void_p(3), canonical_free
-                )
-            )
     def test_taxonomy_uses_only_the_curated_deck(self):
         self.assertEqual(len(references.SCRIPTURE), 185)
         self.assertEqual(len(set(references.SCRIPTURE)), 185)
