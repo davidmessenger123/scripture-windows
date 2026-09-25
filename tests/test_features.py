@@ -220,52 +220,7 @@ class SecurityPlatformTests(unittest.TestCase):
     def test_windows_real_private_directory_and_committed_file_dacl(self):
         with tempfile.TemporaryDirectory() as directory:
             private = Path(directory) / "private"
-            creation_error = None
-            try:
-                create_owner_only_directory(private)
-            except OSError as error:
-                creation_error = error
-            trace = []
-            valid = False
-            diagnostic_error = None
-            handle = None
-            close_handle = None
-            descriptor = None
-            descriptor_free = None
-            current = None
-            try:
-                if private.exists():
-                    handle, _info, close_handle = secure_files_module._windows_handle_path(private)
-                    status, owner, dacl, descriptor, descriptor_free = secure_files_module._windows_security_info(int(handle))
-                    current = secure_files_module._current_user_sid()
-                    _advapi, _kernel, token, sid, sid_text, local_free, close_token = current
-                    valid = secure_files_module._descriptor_owner_only_valid(
-                        descriptor, owner, dacl, sid, trace
-                    ) and status == 0
-            except Exception as error:
-                diagnostic_error = error
-            finally:
-                if current is not None:
-                    _advapi, _kernel, token, sid, sid_text, local_free, close_token = current
-                    if token.value:
-                        close_token(token)
-                    if sid:
-                        local_free(sid)
-                    if sid_text:
-                        local_free(sid_text)
-                if descriptor is not None and descriptor_free is not None:
-                    descriptor_free(descriptor)
-                if handle is not None and close_handle is not None:
-                    close_handle(handle)
-            print(
-                "WINDOWS_ACL_TRACE creation_error=%r diagnostic_error=%r valid=%r trace=%r"
-                % (creation_error, diagnostic_error, valid, trace)
-            )
-            if creation_error is not None:
-                raise creation_error
-            if diagnostic_error is not None:
-                raise diagnostic_error
-            self.assertTrue(valid)
+            create_owner_only_directory(private)
             self.assertTrue(owner_only_dacl_valid(private))
             committed = secure_files_module.secure_atomic_write_bytes(str(private / "card.bin"), b"card")
             self.assertTrue(owner_only_dacl_valid(committed))
@@ -385,8 +340,8 @@ class SecurityPlatformTests(unittest.TestCase):
         free_descriptor.assert_called_once_with(descriptor)
         self.assertTrue(any(call[0] == "set_security_info" for call in calls if isinstance(call, tuple)))
         structural = type("StructuralAdvapi", (), {})()
-        safe_sid_storage = ctypes.create_string_buffer(8)
-        wrong_sid_storage = ctypes.create_string_buffer(8)
+        safe_sid_storage = ctypes.create_string_buffer(b"\x01" * 8)
+        wrong_sid_storage = ctypes.create_string_buffer(b"\x02" * 8)
         current_sid = ctypes.c_void_p(ctypes.addressof(safe_sid_storage))
         descriptor_owner = ctypes.c_void_p(ctypes.addressof(safe_sid_storage))
         dacl_pointer = ctypes.c_void_p(200)
@@ -396,7 +351,7 @@ class SecurityPlatformTests(unittest.TestCase):
             "ace_type": 0,
             "flags": 0,
             "mask": secure_files_module._FILE_ALL_ACCESS,
-            "sid": ctypes.addressof(safe_sid_storage),
+            "sid": safe_sid_storage,
         }
         ace_storage = secure_files_module.ACCESS_ALLOWED_ACE_STRUCT()
 
@@ -428,17 +383,22 @@ class SecurityPlatformTests(unittest.TestCase):
             ace_storage.AceFlags = state["flags"]
             ace_storage.AceSize = ctypes.sizeof(ace_storage)
             ace_storage.Mask = state["mask"]
-            ace_storage.SidStart = state["sid"]
+            sid_offset = secure_files_module.ACCESS_ALLOWED_ACE_STRUCT.SidStart.offset
+            sid_size = ctypes.sizeof(ace_storage) - sid_offset
+            ctypes.memmove(ctypes.byref(ace_storage, sid_offset), state["sid"], sid_size)
             output._obj.value = ctypes.addressof(ace_storage)
             return 1
         structural.GetAce = Function(get_ace)
-        structural.EqualSid = Function(lambda left, right: pointer_value(left) == pointer_value(right))
+        def equal_sid(left, right):
+            sid_size = ctypes.sizeof(ace_storage) - secure_files_module.ACCESS_ALLOWED_ACE_STRUCT.SidStart.offset
+            return ctypes.string_at(pointer_value(left), sid_size) == ctypes.string_at(pointer_value(right), sid_size)
+        structural.EqualSid = Function(equal_sid)
         for name, changes, expected in (
             ("one-safe", {}, True),
             ("owner-different", {"descriptor_owner": ctypes.addressof(wrong_sid_storage)}, True),
             ("extra", {"count": 2}, False),
             ("deny", {"ace_type": 1}, False),
-            ("wrong-SID", {"sid": ctypes.addressof(wrong_sid_storage)}, False),
+            ("wrong-SID", {"sid": wrong_sid_storage}, False),
         ):
             with self.subTest(name=name):
                 state.update({
@@ -447,20 +407,16 @@ class SecurityPlatformTests(unittest.TestCase):
                     "ace_type": 0,
                     "flags": 0,
                     "mask": secure_files_module._FILE_ALL_ACCESS,
-                    "sid": ctypes.addressof(safe_sid_storage),
+                    "sid": safe_sid_storage,
                 })
                 state.update(changes)
-                trace = []
                 with mock.patch.object(secure_files_module, "windows_system_library", return_value=structural):
                     self.assertEqual(
                         secure_files_module._descriptor_owner_only_valid(
-                            ctypes.c_void_p(1), descriptor_owner, dacl_pointer, current_sid, trace
+                            ctypes.c_void_p(1), descriptor_owner, dacl_pointer, current_sid
                         ),
                         expected,
                     )
-                if name == "one-safe":
-                    self.assertTrue(trace)
-                    self.assertTrue(all(item[1] for item in trace))
     def test_taxonomy_uses_only_the_curated_deck(self):
         self.assertEqual(len(references.SCRIPTURE), 185)
         self.assertEqual(len(set(references.SCRIPTURE)), 185)
