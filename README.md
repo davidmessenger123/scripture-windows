@@ -130,12 +130,33 @@ port the change back into both.
 
 A native SwiftUI port is in [`ios/`](ios/). Open
 `ios/Scripture.xcodeproj` in Xcode after installing the iOS SDK. It targets
-iOS 17 and supports iPhone and iPad.
+iOS 17 and supports iPhone and iPad. The iOS app is version `0.2.0`.
 
 The iOS version keeps the Scripture providers, no-repeat deck, passage reveal,
-favorites, history, fixed verse, and jump-to-reference features. The desktop
-system tray is replaced by the app's normal iOS screen, and the daily reminder
-uses a local notification because iOS cannot force-open a suspended app.
+favorites, history, fixed verse, jump-to-reference, and online reading
+features. It also adds a validated, bounded `Library/Caches` passage cache with
+network-first offline fallback, canonical ESV verse-ID accounting, a 500-verse
+provider limit, per-book half limits, and ESV key-generation isolation, plain passage
+copying, file-backed deterministic 1080 × 1350 verse cards shared through
+`ShareLink`, persisted daily-notification reconciliation, deterministic
+book/topic filters, and adjustable verse size, scrim opacity, and reveal speed.
+Provider legal suffixes are filtered from rendered passage surfaces, which show
+only the passage, reference, and compact translation label. The ESV API key
+remains in the iOS Keychain with device-only protection and is never written to
+the passage cache. Settings → Legal & Privacy provides exact provider-request
+disclosures, policy links, cache/key retention and deletion controls, favorite
+and in-memory history behavior, reminder state, and clipboard details.
+
+Book and topic filters affect only the random **Another verse** action. Fixed
+verses, favorites, history, and Jump to verse bypass them. Topic sets are
+curated from the existing reference deck rather than inferred or fetched, and
+empty intersections are rejected instead of broadening the deck. The daily
+reminder uses a local notification because iOS cannot force-open a suspended
+app or perform a background Scripture fetch.
+
+See [`ios/README.md`](ios/README.md) for cache limits, compact translation
+labels, Legal & Privacy, sharing, notification behavior, the Linux static
+release check, and Xcode-only verification notes.
 
 ## License
 

@@ -11,17 +11,20 @@ struct VerseView: View {
                 startPoint: .top,
                 endPoint: .bottom
             )
+            .overlay {
+                Color.black.opacity(viewModel.settings.scrimOpacity)
+            }
             .ignoresSafeArea()
 
             ScrollView {
                 VStack(spacing: 0) {
                     header
+                    filterBar
                     Spacer(minLength: 28)
                     passageContent
                     Spacer(minLength: 28)
                     favoritesSection
                     statusMessages
-                    footer
                 }
                 .frame(maxWidth: 900)
                 .padding(.horizontal, 24)
@@ -34,7 +37,7 @@ struct VerseView: View {
                 await viewModel.refresh()
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                primaryControls
+                controls
                     .padding(.horizontal, 16)
                     .padding(.top, 10)
                     .padding(.bottom, 8)
@@ -97,6 +100,75 @@ struct VerseView: View {
         }
     }
 
+    private var filterBar: some View {
+        HStack(spacing: 8) {
+            Menu {
+                Button("All books") {
+                    viewModel.setBookFilter("")
+                }
+                Divider()
+                ForEach(viewModel.availableBooks, id: \.self) { book in
+                    Button {
+                        viewModel.setBookFilter(book)
+                    } label: {
+                        if viewModel.settings.bookFilter == book {
+                            Label(book, systemImage: "checkmark")
+                        } else {
+                            Text(book)
+                        }
+                    }
+                }
+            } label: {
+                filterMenuLabel(title: "Book", value: viewModel.bookFilterTitle, systemImage: "book.closed")
+            }
+
+            Menu {
+                ForEach(viewModel.availableTopics) { topic in
+                    Button {
+                        viewModel.setTopicFilter(topic)
+                    } label: {
+                        if viewModel.settings.topicFilter == topic {
+                            Label(topic.displayName, systemImage: "checkmark")
+                        } else {
+                            Text(topic.displayName)
+                        }
+                    }
+                }
+            } label: {
+                filterMenuLabel(title: "Topic", value: viewModel.topicFilterTitle, systemImage: "tag")
+            }
+
+            if viewModel.hasActiveFilters {
+                Button("Clear") {
+                    viewModel.setBookFilter("")
+                    viewModel.setTopicFilter(.all)
+                }
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.white.opacity(0.6))
+                .buttonStyle(.plain)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.top, 18)
+    }
+
+    private func filterMenuLabel(title: String, value: String, systemImage: String) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: systemImage)
+            Text("\(title): \(value)")
+                .lineLimit(1)
+            Image(systemName: "chevron.down")
+                .font(.system(size: 8, weight: .bold))
+        }
+        .font(.system(size: 11, weight: .medium))
+        .foregroundStyle(.white.opacity(0.72))
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            Capsule().fill(Color.white.opacity(0.07))
+        )
+    }
+
     private var revealedText: Text {
         let before = Text(viewModel.visibleBefore)
             .foregroundStyle(.white.opacity(0.55))
@@ -117,21 +189,23 @@ struct VerseView: View {
     private var passageContent: some View {
         if let passage = viewModel.passage {
             let isLongPassage = passage.fullText.count > 450
+            let fontSize = CGFloat(viewModel.settings.verseFontSize) * (isLongPassage ? 0.78 : 1)
+            let lineSpacing: CGFloat = isLongPassage ? 5 : 9
             VStack(spacing: 20) {
-                Text(passage.translationName.uppercased())
+                Text(passage.displayTranslationName.uppercased())
                     .font(.system(size: 11, weight: .bold, design: .rounded))
                     .tracking(2.2)
                     .foregroundStyle(.white.opacity(0.55))
 
                 revealedText
-                    .font(.system(size: isLongPassage ? 22 : 28, weight: .light, design: .serif))
-                    .lineSpacing(isLongPassage ? 5 : 9)
+                    .font(.system(size: fontSize, weight: .light, design: .serif))
+                    .lineSpacing(lineSpacing)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 780)
                     .minimumScaleFactor(0.72)
-                    .animation(.easeOut(duration: 0.08), value: viewModel.revealedCharacters)
+                    .animation(viewModel.revealAnimation, value: viewModel.revealedCharacters)
 
-                Text(passage.reference.uppercased())
+                Text(passage.displayReference.uppercased())
                     .font(.system(size: 12, weight: .bold, design: .rounded))
                     .tracking(1.7)
                     .foregroundStyle(Color(red: 0.98, green: 0.66, blue: 0.41))
@@ -149,7 +223,7 @@ struct VerseView: View {
         }
     }
 
-    private var primaryControls: some View {
+    private var controls: some View {
         VStack(spacing: 14) {
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
                 ScriptureActionButton(
@@ -200,6 +274,49 @@ struct VerseView: View {
                     viewModel.isShowingJump = true
                 }
             }
+            secondaryControls
+        }
+    }
+
+    private var secondaryControls: some View {
+        HStack(spacing: 10) {
+            ScriptureActionButton(
+                title: "Copy verse",
+                systemImage: "doc.on.doc",
+                isDisabled: viewModel.passage == nil
+            ) {
+                viewModel.copyPassage()
+            }
+            if let item = viewModel.cardShareItem {
+                ShareLink(item: item, preview: SharePreview("Scripture verse card")) {
+                    HStack(spacing: 7) {
+                        Image(systemName: "square.and.arrow.up")
+                            .font(.system(size: 13, weight: .semibold))
+                        Text("Share card")
+                            .font(.system(size: 13, weight: .medium))
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 13, style: .continuous)
+                            .fill(Color.white.opacity(0.16))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 13, style: .continuous)
+                            .stroke(Color.white.opacity(0.18), lineWidth: 1)
+                    )
+                }
+            } else {
+                ScriptureActionButton(
+                    title: viewModel.isRenderingCard ? "Making card…" : "Create card",
+                    systemImage: "rectangle.portrait.on.rectangle.portrait",
+                    isDisabled: viewModel.passage == nil || viewModel.isRenderingCard
+                ) {
+                    viewModel.generateCard()
+                }
+            }
+            Spacer(minLength: 0)
         }
     }
 
@@ -251,15 +368,11 @@ struct VerseView: View {
             if let error = viewModel.errorMessage {
                 NoticeBanner(text: error, isError: true)
             }
+            if let reminderStatus = viewModel.reminderStatusMessage {
+                NoticeBanner(text: reminderStatus, isError: viewModel.reminderStatusIsError)
+            }
         }
         .padding(.top, 18)
     }
 
-    private var footer: some View {
-        Text("Your daily reminder is managed in Settings.")
-            .font(.system(size: 11, weight: .regular))
-            .foregroundStyle(.white.opacity(0.35))
-            .frame(maxWidth: .infinity)
-            .padding(.top, 22)
-    }
 }

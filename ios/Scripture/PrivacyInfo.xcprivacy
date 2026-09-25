@@ -1,0 +1,12 @@
+{
+  "NSPrivacyTracking": false,
+  "NSPrivacyCollectedDataTypes": [],
+  "NSPrivacyAccessedAPITypes": [
+    {
+      "NSPrivacyAccessedAPIType": "NSPrivacyAccessedAPICategoryUserDefaults",
+      "NSPrivacyAccessedAPITypeReasons": [
+        "CA92.1"
+      ]
+    }
+  ]
+}

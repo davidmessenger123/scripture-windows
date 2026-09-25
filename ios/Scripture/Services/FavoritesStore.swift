@@ -6,17 +6,25 @@ struct FavoritesStore {
     private let maximumEntries = 200
     private let maximumReferenceLength = 120
 
-    init(fileManager: FileManager = .default) {
+    init(fileManager: FileManager = .default, fileURL: URL? = nil) {
         self.fileManager = fileManager
-        let base = (try? fileManager.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        )) ?? fileManager.temporaryDirectory
-        let directory = base.appendingPathComponent("Scripture", isDirectory: true)
-        try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        self.fileURL = directory.appendingPathComponent("favorites.json")
+        if let fileURL {
+            self.fileURL = fileURL
+            try? fileManager.createDirectory(
+                at: fileURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+        } else {
+            let base = (try? fileManager.url(
+                for: .applicationSupportDirectory,
+                in: .userDomainMask,
+                appropriateFor: nil,
+                create: true
+            )) ?? fileManager.temporaryDirectory
+            let directory = base.appendingPathComponent("Scripture", isDirectory: true)
+            try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+            self.fileURL = directory.appendingPathComponent("favorites.json")
+        }
     }
 
     func list() -> [String] {
@@ -33,18 +41,31 @@ struct FavoritesStore {
     }
 
     func add(_ reference: String) -> [String] {
+        let current = list()
         let value = clean(reference)
-        let values = [value] + list().filter { $0 != value }
+        let values = [value] + current.filter { $0 != value }
         let capped = Array(values.prefix(maximumEntries))
-        write(capped)
+        guard write(capped) else { return current }
         return capped
     }
 
     func remove(_ reference: String) -> [String] {
+        let current = list()
         let value = reference.trimmingCharacters(in: .whitespacesAndNewlines)
-        let values = list().filter { $0 != value }
-        write(values)
+        let values = current.filter { $0 != value }
+        guard write(values) else { return current }
         return values
+    }
+
+    @discardableResult
+    func removeAll() -> Bool {
+        guard fileManager.fileExists(atPath: fileURL.path) else { return true }
+        do {
+            try fileManager.removeItem(at: fileURL)
+            return true
+        } catch {
+            return false
+        }
     }
 
     private func clean(_ reference: String) -> String {
@@ -52,8 +73,9 @@ struct FavoritesStore {
         return String(value.prefix(maximumReferenceLength))
     }
 
-    private func write(_ values: [String]) {
-        guard let data = try? JSONEncoder().encode(Array(values.prefix(maximumEntries))) else { return }
+    @discardableResult
+    private func write(_ values: [String]) -> Bool {
+        guard let data = try? JSONEncoder().encode(Array(values.prefix(maximumEntries))) else { return false }
         let directory = fileURL.deletingLastPathComponent()
         try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         let temporary = directory.appendingPathComponent(".favorites-\(UUID().uuidString).tmp")
@@ -64,8 +86,10 @@ struct FavoritesStore {
             } else {
                 try fileManager.moveItem(at: temporary, to: fileURL)
             }
+            return true
         } catch {
             try? fileManager.removeItem(at: temporary)
+            return false
         }
     }
 }

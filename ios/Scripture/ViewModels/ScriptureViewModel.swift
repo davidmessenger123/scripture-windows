@@ -1,5 +1,26 @@
 import Foundation
 import SwiftUI
+import UIKit
+import UniformTypeIdentifiers
+
+enum ClipboardPolicy {
+    static let expirationSeconds: TimeInterval = 300
+    static let localOnly = true
+}
+
+struct CardGenerationSnapshot: Equatable, Sendable {
+    let token: UUID
+    let passage: Passage
+    let settings: AppSettings
+}
+
+enum ReminderEffectiveState: Equatable {
+    case pending
+    case disabled
+    case scheduled
+    case blocked(String)
+    case failed(String)
+}
 
 @MainActor
 final class ScriptureViewModel: ObservableObject {
@@ -15,6 +36,9 @@ final class ScriptureViewModel: ObservableObject {
     @Published private(set) var settingsNotice: String?
     @Published private(set) var settingsNoticeIsError = false
     @Published private(set) var hasLoadedInitialVerse = false
+    @Published private(set) var isRenderingCard = false
+    @Published private(set) var cardShareItem: VerseCardTransfer?
+    @Published private(set) var reminderState: ReminderEffectiveState = .pending
 
     @Published var isShowingSettings = false
     @Published var isShowingJump = false
@@ -23,29 +47,46 @@ final class ScriptureViewModel: ObservableObject {
     private let api: ScriptureAPI
     private let settingsStore: SettingsStore
     private let favoritesStore: FavoritesStore
+    private let passageCache: PassageCache
     private let notificationScheduler: NotificationScheduler
-    private let deck: ScriptureDeck
+    private var deck: ScriptureDeck
+    private var deckPoolContext = ""
     private var pendingAnchor = ""
     private var activeRequestID = UUID()
     private var revealTask: Task<Void, Never>?
+    private var cardTask: Task<Void, Never>?
+    private var cardGenerationToken = UUID()
 
     init(
         api: ScriptureAPI = ScriptureAPI(),
         settingsStore: SettingsStore = SettingsStore(),
         favoritesStore: FavoritesStore = FavoritesStore(),
+        passageCache: PassageCache = PassageCache(),
         notificationScheduler: NotificationScheduler = NotificationScheduler()
     ) {
         self.api = api
         self.settingsStore = settingsStore
         self.favoritesStore = favoritesStore
+        self.passageCache = passageCache
         self.notificationScheduler = notificationScheduler
-        self.deck = ScriptureDeck()
-        self.settings = settingsStore.load()
+        let loadedSettings = settingsStore.load()
+        self.settings = loadedSettings
+        self.reminderState = loadedSettings.autoOpenTime.isEmpty ? .disabled : .pending
         self.favorites = favoritesStore.list()
+        let pool = Self.filteredPool(for: loadedSettings)
+        self.deck = ScriptureDeck(pool: pool)
+        self.deckPoolContext = Self.poolContext(pool)
+        if let error = settingsStore.lastLoadError {
+            self.settingsNotice = error
+            self.settingsNoticeIsError = true
+        } else if let notice = settingsStore.lastLoadNotice {
+            self.settingsNotice = notice
+            self.settingsNoticeIsError = false
+        }
     }
 
     var currentAnchor: String {
-        passage?.anchor ?? pendingAnchor
+        ScriptureReference.cleanProviderText(passage?.anchor ?? pendingAnchor)
     }
 
     var isFavorite: Bool {
@@ -74,35 +115,100 @@ final class ScriptureViewModel: ObservableObject {
         max(0, favorites.count - 8)
     }
 
+    var bookFilterTitle: String {
+        settings.bookFilter.isEmpty ? "All books" : settings.bookFilter
+    }
+
+    var topicFilterTitle: String {
+        settings.topicFilter.displayName
+    }
+
+    var hasActiveFilters: Bool {
+        !settings.bookFilter.isEmpty || settings.topicFilter != .all
+    }
+
+    var reminderDesiredTime: String {
+        settings.autoOpenTime
+    }
+
+    var reminderIsScheduled: Bool {
+        if case .scheduled = reminderState { return true }
+        return false
+    }
+
+    var reminderStatusMessage: String? {
+        switch reminderState {
+        case .pending:
+            return reminderDesiredTime.isEmpty ? nil : "Reminder desired; checking authorization and scheduling."
+        case .disabled:
+            return reminderDesiredTime.isEmpty ? nil : "Reminder desired but not scheduled."
+        case .scheduled:
+            return nil
+        case let .blocked(message):
+            return "Reminder blocked: \(message)"
+        case let .failed(message):
+            return "Reminder failed: \(message)"
+        }
+    }
+
+    var reminderStatusIsError: Bool {
+        switch reminderState {
+        case .pending, .blocked, .failed:
+            return !reminderDesiredTime.isEmpty
+        case .disabled, .scheduled:
+            return false
+        }
+    }
+
+    var revealAnimation: Animation? {
+        guard settings.revealSpeed > 0 else { return nil }
+        return .easeOut(duration: min(0.3, max(0.04, 0.16 / settings.revealSpeed)))
+    }
+
+    var availableBooks: [String] {
+        ScriptureReference.books
+    }
+
+    var availableTopics: [ScriptureTopic] {
+        ScriptureTopic.allCases
+    }
+
     var visibleBefore: String {
         guard let passage else { return "" }
-        return String(passage.before.prefix(min(revealedCharacters, passage.before.count)))
+        let text = passage.displayBefore
+        return String(text.prefix(min(revealedCharacters, text.count)))
     }
 
     var visibleFocal: String {
         guard let passage else { return "" }
-        let beforeCount = min(revealedCharacters, passage.before.count)
-        let focalCount = min(passage.focal.count, max(0, revealedCharacters - beforeCount))
-        return String(passage.focal.prefix(focalCount))
+        let before = passage.displayBefore
+        let focal = passage.displayFocal
+        let beforeCount = min(revealedCharacters, before.count)
+        let focalCount = min(focal.count, max(0, revealedCharacters - beforeCount))
+        return String(focal.prefix(focalCount))
     }
 
     var visibleAfter: String {
         guard let passage else { return "" }
-        let beforeCount = min(revealedCharacters, passage.before.count)
-        let focalCount = min(passage.focal.count, max(0, revealedCharacters - beforeCount))
-        let afterCount = min(passage.after.count, max(0, revealedCharacters - beforeCount - focalCount))
-        return String(passage.after.prefix(afterCount))
+        let before = passage.displayBefore
+        let focal = passage.displayFocal
+        let after = passage.displayAfter
+        let beforeCount = min(revealedCharacters, before.count)
+        let focalCount = min(focal.count, max(0, revealedCharacters - beforeCount))
+        let afterCount = min(after.count, max(0, revealedCharacters - beforeCount - focalCount))
+        return String(after.prefix(afterCount))
     }
 
     var browserURL: URL? {
         guard let passage else { return nil }
-        return ScriptureReference.browserURL(for: passage.reference, translation: passage.translation)
+        return ScriptureReference.browserURL(for: passage.displayReference, translation: passage.translation)
     }
 
     func loadInitialIfNeeded() async {
         guard !hasLoadedInitialVerse else { return }
         hasLoadedInitialVerse = true
         await refresh()
+        await reconcileReminderIfPossible()
     }
 
     func refresh() async {
@@ -110,15 +216,15 @@ final class ScriptureViewModel: ObservableObject {
         if !fixed.isEmpty {
             await loadReference(fixed)
         } else {
-            let reference = deck.draw(avoiding: passage?.anchor)
-            await loadReference(reference)
+            await loadReference(drawRandomReference())
         }
     }
 
     func loadReference(_ rawReference: String, recordHistory: Bool = true) async {
-        let reference = rawReference.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !reference.isEmpty else { return }
+        let reference = ScriptureReference.cleanProviderText(rawReference)
+        guard !reference.isEmpty, AppSettings.isValidFixedReference(reference) else { return }
 
+        invalidateCardGeneration()
         pendingAnchor = reference
         if recordHistory {
             record(reference)
@@ -129,18 +235,21 @@ final class ScriptureViewModel: ObservableObject {
         isLoading = true
         notice = nil
         errorMessage = nil
+        let requestedTranslation = settings.translation
+        let key = settings.apiKey
+        let esvKeyIdentity = ScriptureAPI.esvKeyIdentity(for: key)
 
         do {
-            let requestedTranslation = settings.translation
-            let key = settings.apiKey
             let result = try await api.fetch(
                 anchor: reference,
                 translation: requestedTranslation,
                 apiKey: key
             )
             guard activeRequestID == requestID else { return }
-            if requestedTranslation == .esv, key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                notice = "Set an ESV API key in Settings to read the ESV — showing the World English Bible."
+            _ = await passageCache.store(result, esvKeyIdentity: esvKeyIdentity)
+            guard activeRequestID == requestID else { return }
+            if requestedTranslation == .esv, esvKeyIdentity == nil {
+                notice = "Set an ESV API key in Settings to read the ESV — showing WEB."
             }
             apply(result)
         } catch is CancellationError {
@@ -148,11 +257,22 @@ final class ScriptureViewModel: ObservableObject {
             isLoading = false
         } catch {
             guard activeRequestID == requestID else { return }
-            isLoading = false
-            if passage == nil {
-                hasLoadedInitialVerse = false
+            if let cached = await passageCache.passage(
+                for: reference,
+                translations: cacheTranslations(for: requestedTranslation, apiKey: key),
+                esvKeyIdentity: esvKeyIdentity
+            ) {
+                guard activeRequestID == requestID else { return }
+                apply(cached)
+                notice = "Offline: showing the last saved passage."
+                errorMessage = nil
+            } else {
+                isLoading = false
+                if passage == nil {
+                    hasLoadedInitialVerse = false
+                }
+                errorMessage = "Could not load that passage. No saved offline passage is available; check your connection and try again."
             }
-            errorMessage = "Could not load that passage. Check your connection and try again."
         }
     }
 
@@ -169,7 +289,7 @@ final class ScriptureViewModel: ObservableObject {
     }
 
     func submitJump() async {
-        let reference = jumpText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let reference = ScriptureReference.cleanProviderText(jumpText)
         jumpText = ""
         isShowingJump = false
         await loadReference(reference)
@@ -187,47 +307,192 @@ final class ScriptureViewModel: ObservableObject {
         favorites = favoritesStore.remove(reference)
     }
 
+    @discardableResult
+    func deleteAllFavorites() -> Bool {
+        guard favoritesStore.removeAll() else {
+            notice = nil
+            errorMessage = "Favorites could not be deleted."
+            return false
+        }
+        favorites = []
+        notice = "All favorites deleted."
+        errorMessage = nil
+        return true
+    }
+
     func loadFavorite(_ reference: String) async {
         await loadReference(reference)
     }
 
-    func saveSettings(_ draft: AppSettings) async {
-        let normalized = AppSettings(
-            apiKey: draft.apiKey.trimmingCharacters(in: .whitespacesAndNewlines),
-            translation: draft.translation,
-            fixedReference: draft.fixedReference.trimmingCharacters(in: .whitespacesAndNewlines),
-            autoOpenTime: draft.autoOpenTime.trimmingCharacters(in: .whitespacesAndNewlines)
-        )
+    func setBookFilter(_ value: String) {
+        let requested = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let canonical = requested.isEmpty ? "" : AppSettings.canonicalBook(requested)
+        guard requested.isEmpty || canonical != nil else {
+            showFilterResetExplanation("That book is not available.")
+            return
+        }
+        var draft = settings
+        draft.bookFilter = canonical ?? ""
+        if !AppSettings.hasFilterIntersection(book: draft.bookFilter, topic: draft.topicFilter) {
+            showFilterResetExplanation("That book and topic have no verses in the deck.")
+            return
+        }
+        do {
+            try settingsStore.save(draft)
+        } catch {
+            showSettingsPersistenceError(error)
+            return
+        }
+        settings = draft.normalized
+        invalidateCardGeneration()
+        resetDeck(for: settings)
+        clearFilterNotice()
+    }
 
-        if !normalized.autoOpenTime.isEmpty, Self.timeComponents(normalized.autoOpenTime) == nil {
-            settingsNotice = "Auto-open must be a 24-hour time like 07:30."
+    func setTopicFilter(_ topic: ScriptureTopic) {
+        var draft = settings
+        draft.topicFilter = topic
+        if !AppSettings.hasFilterIntersection(book: draft.bookFilter, topic: topic) {
+            showFilterResetExplanation("That book and topic have no verses in the deck.")
+            return
+        }
+        do {
+            try settingsStore.save(draft)
+        } catch {
+            showSettingsPersistenceError(error)
+            return
+        }
+        settings = draft.normalized
+        invalidateCardGeneration()
+        resetDeck(for: settings)
+        clearFilterNotice()
+    }
+
+    func copyPassage() {
+        guard let passage else { return }
+        UIPasteboard.general.setItems(
+            [[UTType.utf8PlainText.identifier: passage.plainFormattedText]],
+            options: [
+                .localOnly: ClipboardPolicy.localOnly,
+                .expirationDate: Date(timeIntervalSinceNow: ClipboardPolicy.expirationSeconds)
+            ]
+        )
+        notice = "Passage copied locally for 5 minutes."
+        errorMessage = nil
+    }
+
+    func generateCard() {
+        guard let passage else { return }
+        cardTask?.cancel()
+        let snapshot = CardGenerationSnapshot(
+            token: UUID(),
+            passage: passage,
+            settings: settings
+        )
+        cardGenerationToken = snapshot.token
+        cardShareItem = nil
+        isRenderingCard = true
+        let task = Task { [weak self] in
+            guard let self else { return }
+            defer { self.finishCardTask(token: snapshot.token) }
+            do {
+                try Task.checkCancellation()
+                guard let image = PassageCardRenderer.renderImage(
+                    passage: snapshot.passage,
+                    fontSize: snapshot.settings.verseFontSize
+                ) else {
+                    guard self.isCurrentCardSnapshot(snapshot) else { return }
+                    self.errorMessage = "The verse card could not be generated."
+                    return
+                }
+                let data = try await Task.detached(priority: .userInitiated) {
+                    try Task.checkCancellation()
+                    let encoded = image.image.pngData()
+                    try Task.checkCancellation()
+                    return encoded
+                }.value
+                try Task.checkCancellation()
+                guard self.isCurrentCardSnapshot(snapshot) else { return }
+                guard let data else {
+                    self.errorMessage = "The verse card could not be encoded."
+                    return
+                }
+                let url = try VerseCardTransfer.write(
+                    data: data,
+                    reference: snapshot.passage.displayReference
+                )
+                try Task.checkCancellation()
+                guard self.isCurrentCardSnapshot(snapshot) else {
+                    try? FileManager.default.removeItem(at: url)
+                    return
+                }
+                self.cardShareItem = VerseCardTransfer(url: url)
+                self.notice = "Verse card ready to share."
+                self.errorMessage = nil
+            } catch is CancellationError {
+                return
+            } catch {
+                guard self.isCurrentCardSnapshot(snapshot) else { return }
+                self.errorMessage = "The verse card file could not be prepared."
+            }
+        }
+        cardTask = task
+    }
+
+    func saveSettings(_ draft: AppSettings) async {
+        if let message = SettingsStore.validationMessage(for: draft) {
+            settingsNotice = message
+            settingsNoticeIsError = true
+            return
+        }
+
+        let normalized = draft.normalized
+        let oldSettings = settings
+        do {
+            try settingsStore.save(normalized)
+        } catch {
+            settingsNotice = "Settings could not be saved: \(error.localizedDescription)"
             settingsNoticeIsError = true
             return
         }
 
         settings = normalized
-        settingsStore.save(normalized)
+        if oldSettings != normalized {
+            invalidateCardGeneration()
+        }
+        resetDeck(for: settings)
+        if oldSettings.revealSpeed != normalized.revealSpeed {
+            startReveal()
+        }
         settingsNotice = "Saved."
         settingsNoticeIsError = false
+        reminderState = normalized.autoOpenTime.isEmpty ? .disabled : .pending
 
-        guard !normalized.autoOpenTime.isEmpty else {
-            notificationScheduler.cancelDaily()
+        guard let (hour, minute) = Self.timeComponents(normalized.autoOpenTime) else {
+            await notificationScheduler.cancelDaily()
+            reminderState = .disabled
             return
         }
-        guard let (hour, minute) = Self.timeComponents(normalized.autoOpenTime) else { return }
-        let authorized = await notificationScheduler.requestAuthorization()
-        guard authorized else {
-            settingsNotice = "Saved, but notifications are disabled for Scripture."
-            settingsNoticeIsError = true
-            return
-        }
-        do {
-            try await notificationScheduler.scheduleDaily(hour: hour, minute: minute)
+        _ = await notificationScheduler.requestAuthorization()
+        let result = await notificationScheduler.reconcileDaily(
+            hour: hour,
+            minute: minute,
+            passage: passage
+        )
+        applyReminderResult(result, desiredTime: normalized.autoOpenTime)
+        switch result {
+        case .scheduled, .unchanged:
             settingsNotice = "Saved. Daily reminder scheduled for \(normalized.autoOpenTime)."
             settingsNoticeIsError = false
-        } catch {
-            settingsNotice = "Saved, but the daily reminder could not be scheduled."
+        case .unauthorized:
+            settingsNotice = "Reminder desired, but notifications are not authorized. The saved time remains editable."
             settingsNoticeIsError = true
+        case let .failed(message):
+            settingsNotice = "Reminder desired, but scheduling failed: \(message)"
+            settingsNoticeIsError = true
+        case .disabled:
+            settingsNotice = "Reminder turned off."
+            settingsNoticeIsError = false
         }
     }
 
@@ -236,11 +501,102 @@ final class ScriptureViewModel: ObservableObject {
         settingsNoticeIsError = false
     }
 
-    func handleScenePhase(_ phase: ScenePhase) {
-        guard phase == .active, passage == nil else { return }
-        Task { [weak self] in
-            await self?.loadInitialIfNeeded()
+    @discardableResult
+    func deletePassageCache() async -> Bool {
+        let removed = await passageCache.removeAll()
+        if removed {
+            notice = "Passage cache deleted."
+            errorMessage = nil
+            return true
         }
+        let message = "The passage cache could not be deleted."
+        notice = message
+        errorMessage = message
+        return false
+    }
+
+    @discardableResult
+    func deleteAPIKey() async -> Bool {
+        var draft = settings
+        draft.apiKey = ""
+        do {
+            try settingsStore.save(draft)
+            settings = draft.normalized
+            invalidateCardGeneration()
+            let cacheRemoved = await passageCache.removeAll()
+            guard cacheRemoved else {
+                settingsNotice = "The ESV API key was deleted, but the passage cache could not be deleted."
+                settingsNoticeIsError = true
+                return false
+            }
+            notice = "ESV API key and passage cache deleted."
+            errorMessage = nil
+            return true
+        } catch {
+            settingsNotice = "The ESV API key could not be deleted: \(error.localizedDescription)"
+            settingsNoticeIsError = true
+            return false
+        }
+    }
+
+    func handleScenePhase(_ phase: ScenePhase) {
+        guard phase == .active else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            await self.loadInitialIfNeeded()
+            await self.reconcileReminderIfPossible()
+        }
+    }
+
+    private func drawRandomReference() -> String {
+        let pool = Self.filteredPool(for: settings)
+        guard !pool.isEmpty else {
+            var reset = settings
+            reset.bookFilter = ""
+            reset.topicFilter = .all
+            do {
+                try settingsStore.save(reset)
+                settings = reset.normalized
+                invalidateCardGeneration()
+                resetDeck(for: settings)
+                showFilterResetExplanation("The selected filters had no verses, so they were reset.")
+            } catch {
+                showSettingsPersistenceError(error)
+            }
+            return deck.draw()
+        }
+        let context = Self.poolContext(pool)
+        if deckPoolContext != context {
+            deck = ScriptureDeck(pool: pool)
+            deckPoolContext = context
+        }
+        return deck.draw(avoiding: passage?.anchor)
+    }
+
+    private func resetDeck(for settings: AppSettings) {
+        let pool = Self.filteredPool(for: settings)
+        let context = Self.poolContext(pool)
+        guard deckPoolContext != context else { return }
+        deck = ScriptureDeck(pool: pool)
+        deckPoolContext = context
+    }
+
+    private static func filteredPool(for settings: AppSettings) -> [String] {
+        ScriptureReference.references(
+            book: settings.bookFilter,
+            topic: settings.topicFilter
+        )
+    }
+
+    private static func poolContext(_ pool: [String]) -> String {
+        pool.joined(separator: "\u{1f}")
+    }
+
+    private func cacheTranslations(for translation: Translation, apiKey: String) -> [Translation] {
+        if translation == .esv, ScriptureAPI.esvKeyIdentity(for: apiKey) == nil {
+            return [.web]
+        }
+        return [translation]
     }
 
     private func record(_ reference: String) {
@@ -260,18 +616,72 @@ final class ScriptureViewModel: ObservableObject {
         pendingAnchor = newPassage.anchor
         isLoading = false
         errorMessage = nil
+        invalidateCardGeneration()
         revealedCharacters = 0
         startReveal()
+        Task { [weak self] in
+            await self?.reconcileReminderIfPossible()
+        }
+    }
+
+    private func isCurrentCardSnapshot(_ snapshot: CardGenerationSnapshot) -> Bool {
+        Self.cardSnapshotMatches(
+            snapshot,
+            token: cardGenerationToken,
+            passage: passage,
+            settings: settings
+        )
+    }
+
+    nonisolated static func cardSnapshotMatches(
+        _ snapshot: CardGenerationSnapshot,
+        token: UUID,
+        passage: Passage?,
+        settings: AppSettings
+    ) -> Bool {
+        guard token == snapshot.token,
+              let currentPassage = passage,
+              currentPassage == snapshot.passage else {
+            return false
+        }
+        return settings == snapshot.settings
+    }
+
+    private func finishCardTask(token: UUID) {
+        guard cardGenerationToken == token else { return }
+        cardTask = nil
+        isRenderingCard = false
+    }
+
+    private func invalidateCardGeneration() {
+        cardGenerationToken = UUID()
+        cardTask?.cancel()
+        cardTask = nil
+        isRenderingCard = false
+        cardShareItem = nil
     }
 
     private func startReveal() {
         revealTask?.cancel()
-        guard let total = passage?.visibleTextCount, total > 0 else { return }
-        let step = max(1, Int(ceil(Double(total) * 16.0 / 2_200.0)))
+        guard let total = passage?.visibleTextCount, total > 0 else {
+            revealTask = nil
+            return
+        }
+        let speed = settings.revealSpeed
+        guard RevealTiming.duration(for: speed) != nil else {
+            revealedCharacters = total
+            revealTask = nil
+            return
+        }
+        let step = RevealTiming.step(total: total, speed: speed)
         revealTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 16_000_000)
-                guard !Task.isCancelled, let self else { return }
+                do {
+                    try await Task.sleep(nanoseconds: RevealTiming.intervalNanoseconds)
+                } catch {
+                    return
+                }
+                guard !Task.isCancelled, let self = self else { return }
                 let current = self.revealedCharacters
                 if current >= total {
                     self.revealTask = nil
@@ -286,15 +696,69 @@ final class ScriptureViewModel: ObservableObject {
         }
     }
 
+    private func reconcileReminderIfPossible() async {
+        let desiredTime = settings.autoOpenTime
+        let time = Self.timeComponents(desiredTime)
+        let result = await notificationScheduler.reconcileDaily(
+            hour: time?.hour,
+            minute: time?.minute,
+            passage: passage
+        )
+        applyReminderResult(result, desiredTime: desiredTime)
+    }
+
+    private func applyReminderResult(
+        _ result: NotificationReconcileResult,
+        desiredTime: String
+    ) {
+        reminderState = Self.effectiveReminderState(
+            for: result,
+            desiredTime: desiredTime
+        )
+    }
+
+    private func showFilterResetExplanation(_ message: String) {
+        notice = message
+        errorMessage = nil
+    }
+
+    private func clearFilterNotice() {
+        notice = nil
+        errorMessage = nil
+    }
+
+    private func showSettingsPersistenceError(_ error: Error) {
+        settingsNotice = "Settings could not be saved: \(error.localizedDescription)"
+        settingsNoticeIsError = true
+    }
+
+    nonisolated static func effectiveReminderState(
+        for result: NotificationReconcileResult,
+        desiredTime: String
+    ) -> ReminderEffectiveState {
+        switch result {
+        case .disabled:
+            return desiredTime.isEmpty
+                ? .disabled
+                : .failed("The desired reminder time is not valid.")
+        case .unchanged, .scheduled:
+            return .scheduled
+        case .unauthorized:
+            return .blocked("Notifications are not authorized.")
+        case let .failed(message):
+            return .failed(message)
+        }
+    }
+
     nonisolated static func timeComponents(_ value: String) -> (hour: Int, minute: Int)? {
         let parts = value.split(separator: ":", omittingEmptySubsequences: false)
         guard parts.count == 2,
+              parts[0].count == 2,
+              parts[1].count == 2,
               let hour = Int(parts[0]),
               let minute = Int(parts[1]),
               (0...23).contains(hour),
-              (0...59).contains(minute),
-              parts[0].count == 2,
-              parts[1].count == 2 else {
+              (0...59).contains(minute) else {
             return nil
         }
         return (hour, minute)

@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// A small decoder used for bible-api.com fields that are sometimes strings and
@@ -36,9 +37,7 @@ struct WebVerse: Decodable {
         let text = try container.decodeIfPresent(FlexibleString.self, forKey: .text)
         self.number = Int(verse?.value ?? "") ?? Int(number?.value ?? "")
         let rawText = text?.value ?? ""
-        self.text = rawText
-            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        self.text = ScriptureReference.cleanProviderText(rawText)
     }
 }
 
@@ -93,8 +92,26 @@ enum ScriptureAPIError: LocalizedError {
 struct ScriptureAPI: Sendable {
     private static let esvURL = "https://api.esv.org/v3/passage/text/"
     private static let webURL = "https://bible-api.com"
-    private static let maxResponseBytes = 262_144
+    static let maxResponseBytes = 262_144
     private static let timeout: TimeInterval = 15
+
+    static func canAppendResponseByte(currentCount: Int) -> Bool {
+        currentCount < maxResponseBytes
+    }
+
+    static var userAgent: String {
+        let version = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String)?
+            .flatMap { $0.isEmpty ? nil : $0 } ?? "0.2.0"
+        return "scripture-ios/\(version)"
+    }
+
+    static func esvKeyIdentity(for apiKey: String?) -> String? {
+        guard let value = apiKey?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
+            return nil
+        }
+        let digest = SHA256.hash(data: Data("esv-key-v1:\(value)".utf8))
+        return digest.map { String(format: "%02x", Int($0)) }.joined()
+    }
 
     private let session: URLSession
 
@@ -152,7 +169,7 @@ struct ScriptureAPI: Sendable {
         request.timeoutInterval = Self.timeout
         request.setValue("Token \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue("scripture-ios/1.0", forHTTPHeaderField: "User-Agent")
+        request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
 
         let data = try await perform(request)
         let response: ESVResponse
@@ -188,7 +205,7 @@ struct ScriptureAPI: Sendable {
         request.httpMethod = "GET"
         request.timeoutInterval = Self.timeout
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue("scripture-ios/1.0", forHTTPHeaderField: "User-Agent")
+        request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
 
         let data = try await perform(request)
         let response: WebResponse
@@ -201,16 +218,19 @@ struct ScriptureAPI: Sendable {
             throw ScriptureAPIError.network(error)
         }
         guard let verses = response.verses, !verses.isEmpty else {
-            if let text = response.text?.value?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
-                return Passage(
-                    anchor: anchor,
-                    before: "",
-                    focal: text,
-                    after: "",
-                    reference: response.reference?.value?.nonEmpty ?? reference,
-                    translation: translation,
-                    translationName: translation.displayName
-                )
+            if let rawText = response.text?.value {
+                let text = ScriptureReference.cleanProviderText(rawText)
+                if !text.isEmpty {
+                    return Passage(
+                        anchor: anchor,
+                        before: "",
+                        focal: text,
+                        after: "",
+                        reference: response.reference?.value?.nonEmpty ?? reference,
+                        translation: translation,
+                        translationName: translation.displayName
+                    )
+                }
             }
             throw ScriptureAPIError.emptyPassage
         }
@@ -235,23 +255,28 @@ struct ScriptureAPI: Sendable {
     }
 
     private func perform(_ request: URLRequest) async throws -> Data {
-        let data: Data
-        let response: URLResponse
         do {
-            (data, response) = try await session.data(for: request)
+            let (bytes, response) = try await session.bytes(for: request)
+            if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+                throw ScriptureAPIError.server(statusCode: http.statusCode)
+            }
+
+            var data = Data()
+            data.reserveCapacity(Self.maxResponseBytes)
+            for try await byte in bytes {
+                guard Self.canAppendResponseByte(currentCount: data.count) else {
+                    throw ScriptureAPIError.responseTooLarge
+                }
+                data.append(byte)
+            }
+            return data
         } catch is CancellationError {
             throw CancellationError()
+        } catch let error as ScriptureAPIError {
+            throw error
         } catch {
             throw ScriptureAPIError.network(error.localizedDescription)
         }
-
-        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            throw ScriptureAPIError.server(statusCode: http.statusCode)
-        }
-        guard data.count <= Self.maxResponseBytes else {
-            throw ScriptureAPIError.responseTooLarge
-        }
-        return data
     }
 }
 

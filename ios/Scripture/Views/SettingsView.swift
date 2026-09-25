@@ -7,9 +7,15 @@ struct SettingsView: View {
     @State private var apiKey = ""
     @State private var translation: Translation = .esv
     @State private var fixedReference = ""
+    @State private var bookFilter = ""
+    @State private var topicFilter: ScriptureTopic = .all
+    @State private var verseFontSize: Double = 28
+    @State private var scrimOpacity: Double = 0.12
+    @State private var revealSpeed: Double = 0.5
     @State private var hasReminder = false
     @State private var reminderTime = Date()
     @State private var didLoad = false
+    @State private var isShowingLegal = false
 
     var body: some View {
         NavigationStack {
@@ -42,7 +48,25 @@ struct SettingsView: View {
                 }
 
                 Section {
-                    Toggle("Daily reminder", isOn: $hasReminder)
+                    Picker("Book", selection: $bookFilter) {
+                        Text("All books").tag("")
+                        ForEach(viewModel.availableBooks, id: \.self) { book in
+                            Text(book).tag(book)
+                        }
+                    }
+                    Picker("Topic", selection: $topicFilter) {
+                        ForEach(viewModel.availableTopics) { topic in
+                            Text(topic.displayName).tag(topic)
+                        }
+                    }
+                } header: {
+                    Label("Filters", systemImage: "line.3.horizontal.decrease.circle")
+                } footer: {
+                    Text("Filters apply to Another verse only. Fixed verses, favorites, history, and Jump to verse always use the selected reference.")
+                }
+
+                Section {
+                    Toggle("Daily verse notification", isOn: $hasReminder)
                         .onChange(of: hasReminder) { _, enabled in
                             if enabled, reminderTimeString.isEmpty {
                                 reminderTime = dateFromTime("07:30") ?? Date()
@@ -52,11 +76,65 @@ struct SettingsView: View {
                         DatePicker("Time", selection: $reminderTime, displayedComponents: .hourAndMinute)
                             .datePickerStyle(.wheel)
                             .labelsHidden()
+                        Text(viewModel.reminderDesiredTime.isEmpty
+                            ? "Save the desired time to request scheduling."
+                            : (viewModel.reminderStatusMessage ?? "Scheduled and active."))
+                            .font(.footnote)
+                            .foregroundStyle(viewModel.reminderStatusIsError ? Color.red : Color.secondary)
+                    } else {
+                        Text("Reminder is off.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
                 } header: {
                     Label("Reminder", systemImage: "bell")
                 } footer: {
                     Text("iOS delivers a local notification at the selected time. It cannot force-open the app while it is in the background.")
+                }
+
+                Section {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("Verse size")
+                            Spacer()
+                            Text("\(Int(verseFontSize)) pt")
+                                .foregroundStyle(.secondary)
+                        }
+                        Slider(value: $verseFontSize, in: 16...44, step: 1)
+                    }
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("Scrim opacity")
+                            Spacer()
+                            Text("\(Int(scrimOpacity * 100))%")
+                                .foregroundStyle(.secondary)
+                        }
+                        Slider(value: $scrimOpacity, in: 0...0.95, step: 0.01)
+                    }
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("Animation / reveal speed")
+                            Spacer()
+                            Text("\(Int(revealSpeed * 100))%")
+                                .foregroundStyle(.secondary)
+                        }
+                        Slider(value: $revealSpeed, in: 0...1, step: 0.05)
+                    }
+                } header: {
+                    Label("Appearance", systemImage: "textformat.size")
+                } footer: {
+                    Text("A zero scrim is fully off. A zero animation speed shows each passage immediately; higher values reveal it faster.")
+                }
+
+                Section {
+                    Button {
+                        isShowingLegal = true
+                    } label: {
+                        Label("Legal & Privacy", systemImage: "hand.raised")
+                    }
+                    .accessibilityHint("Opens legal, privacy, cache, and clipboard information")
+                } header: {
+                    Label("About", systemImage: "info.circle")
                 }
 
                 Section {
@@ -113,8 +191,12 @@ struct SettingsView: View {
             }
         }
         .onAppear(perform: loadDraft)
-        .onDisappear {
-            // The draft is intentionally discarded when cancelled.
+        .onChange(of: viewModel.settings.apiKey) { _, value in
+            apiKey = value
+        }
+        .sheet(isPresented: $isShowingLegal) {
+            LegalPrivacyView()
+                .environmentObject(viewModel)
         }
     }
 
@@ -127,11 +209,15 @@ struct SettingsView: View {
     private func loadDraft() {
         guard !didLoad else { return }
         didLoad = true
-        viewModel.clearSettingsNotice()
         let settings = viewModel.settings
         apiKey = settings.apiKey
         translation = settings.translation
         fixedReference = settings.fixedReference
+        bookFilter = settings.bookFilter
+        topicFilter = settings.topicFilter
+        verseFontSize = settings.verseFontSize
+        scrimOpacity = settings.scrimOpacity
+        revealSpeed = settings.revealSpeed
         hasReminder = !settings.autoOpenTime.isEmpty
         reminderTime = dateFromTime(settings.autoOpenTime) ?? dateFromTime("07:30") ?? Date()
     }
@@ -142,7 +228,12 @@ struct SettingsView: View {
             apiKey: apiKey,
             translation: translation,
             fixedReference: fixedReference,
-            autoOpenTime: hasReminder ? Self.formatter.string(from: reminderTime) : ""
+            autoOpenTime: hasReminder ? Self.formatter.string(from: reminderTime) : "",
+            bookFilter: bookFilter,
+            topicFilter: topicFilter,
+            verseFontSize: verseFontSize,
+            scrimOpacity: scrimOpacity,
+            revealSpeed: revealSpeed
         )
         await viewModel.saveSettings(draft)
         if !viewModel.settingsNoticeIsError {
