@@ -547,20 +547,26 @@ class PassageCacheTests(unittest.TestCase):
             self.assertEqual(len(PassageCache(directory).list()), 1)
 
     def test_fresh_private_directories_and_cache_key_are_owner_only(self):
+        def assert_private(path, mode):
+            if os.name == "nt":
+                self.assertTrue(owner_only_dacl_valid(str(path)))
+            else:
+                self.assertEqual(stat.S_IMODE(path.stat().st_mode), mode)
+
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "fresh" / "app"
             create_owner_only_directory(root)
-            self.assertEqual(stat.S_IMODE(root.stat().st_mode), 0o700)
+            assert_private(root, 0o700)
             store = PassageCache(str(root))
             self.put(store, self.sample())
-            self.assertEqual(stat.S_IMODE(Path(store.key_path).stat().st_mode), 0o600)
-            self.assertEqual(stat.S_IMODE(Path(store.path).stat().st_mode), 0o600)
+            assert_private(Path(store.key_path), 0o600)
+            assert_private(Path(store.path), 0o600)
             secret = SecretStore(str(root))
             secret.save("secret")
-            self.assertEqual(stat.S_IMODE(Path(secret.path).stat().st_mode), 0o600)
+            assert_private(Path(secret.path), 0o600)
             share = root / "Pictures" / "Scripture"
             create_owner_only_directory(share)
-            self.assertEqual(stat.S_IMODE(share.stat().st_mode), 0o700)
+            assert_private(share, 0o700)
 
         mutations = (
             ("translation_id", "esv"),

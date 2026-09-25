@@ -399,12 +399,23 @@ def _restrict_handle_windows(handle: int) -> None:
             local_free(descriptor)
 
 
+def _windows_native_handle(handle: int) -> int:
+    if os.name != "nt":
+        raise OSError("Windows handles are unavailable")
+    import msvcrt
+
+    native_handle = msvcrt.get_osfhandle(int(handle))
+    if native_handle == -1:
+        raise ctypes.WinError(ctypes.get_last_error())
+    return int(native_handle)
+
+
 def restrict_handle_owner_only(handle: int) -> None:
     if os.name != "nt":
         os.fchmod(int(handle), stat.S_IRUSR | stat.S_IWUSR)
         return
     try:
-        _restrict_handle_windows(int(handle))
+        _restrict_handle_windows(_windows_native_handle(handle))
     except (AttributeError, TypeError, ValueError, ctypes.ArgumentError) as exc:
         raise OSError("could not apply owner-only handle permissions") from exc
 
@@ -435,7 +446,11 @@ def owner_only_handle_valid(handle: int) -> bool:
         except OSError:
             return False
         return stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid() and not info.st_mode & 0o077
-    status, owner, dacl, descriptor, descriptor_free = _windows_security_info(int(handle))
+    try:
+        native_handle = _windows_native_handle(handle)
+    except (AttributeError, OSError, TypeError, ValueError, ctypes.ArgumentError):
+        return False
+    status, owner, dacl, descriptor, descriptor_free = _windows_security_info(native_handle)
     current = None
     try:
         current = _current_user_sid()
@@ -603,7 +618,10 @@ def open_file_no_follow(path: str, flags: int = os.O_RDONLY) -> int:
         None,
     )
     if handle == _INVALID_HANDLE_VALUE or not handle:
-        raise ctypes.WinError(ctypes.get_last_error())
+        error = ctypes.get_last_error()
+        if error in {2, 3}:
+            raise FileNotFoundError(error, os.strerror(error), target)
+        raise ctypes.WinError(error)
     try:
         return msvcrt.open_osfhandle(handle, flags | getattr(os, "O_BINARY", 0))
     except Exception:
