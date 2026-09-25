@@ -132,6 +132,50 @@ class DeferredFetcher(QObject):
         })
 
 
+def _windows_security_diagnostic(path):
+    handle, _info, close_handle = secure_files_module._windows_handle_path(str(path))
+    owner_string = secure_files_module.wintypes.LPWSTR()
+    dacl_string = secure_files_module.wintypes.LPWSTR()
+    string_length = secure_files_module.wintypes.DWORD()
+    descriptor = ctypes.c_void_p()
+    descriptor_free = None
+    try:
+        status, owner, dacl, descriptor, descriptor_free = secure_files_module._windows_security_info(int(handle))
+        advapi32 = secure_files_module.windows_system_library("advapi32.dll")
+        convert_sid = advapi32.ConvertSidToStringSidW
+        convert_sid.argtypes = [ctypes.c_void_p, ctypes.POINTER(secure_files_module.wintypes.LPWSTR)]
+        convert_sid.restype = secure_files_module.wintypes.BOOL
+        convert_descriptor = advapi32.ConvertSecurityDescriptorToStringSecurityDescriptorW
+        convert_descriptor.argtypes = [
+            ctypes.c_void_p,
+            secure_files_module.wintypes.DWORD,
+            secure_files_module.wintypes.DWORD,
+            ctypes.POINTER(secure_files_module.wintypes.LPWSTR),
+            ctypes.POINTER(secure_files_module.wintypes.DWORD),
+        ]
+        convert_descriptor.restype = secure_files_module.wintypes.BOOL
+        if status != 0 or not convert_sid(owner, ctypes.byref(owner_string)):
+            raise AssertionError("Windows security diagnostic could not read owner SID")
+        if not convert_descriptor(
+            descriptor,
+            secure_files_module._DACL_SECURITY_INFORMATION,
+            secure_files_module._SDDL_REVISION_1,
+            ctypes.byref(dacl_string),
+            ctypes.byref(string_length),
+        ):
+            raise AssertionError("Windows security diagnostic could not read DACL SDDL")
+        return str(owner_string.value or ""), str(dacl_string.value or "")
+    finally:
+        if descriptor_free is not None:
+            if owner_string:
+                descriptor_free(owner_string)
+            if dacl_string:
+                descriptor_free(dacl_string)
+            if descriptor:
+                descriptor_free(descriptor)
+        close_handle(handle)
+
+
 class SecurityPlatformTests(unittest.TestCase):
     def test_macos_native_keychain_crud_uses_security_framework_boundary(self):
         state = {"item": False, "value": b"native-secret", "added": [], "modified": [], "deleted": False}
@@ -221,8 +265,12 @@ class SecurityPlatformTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             private = Path(directory) / "private"
             create_owner_only_directory(private)
-            self.assertTrue(owner_only_dacl_valid(private))
+            owner_sid, dacl_sddl = _windows_security_diagnostic(private)
             committed = secure_files_module.secure_atomic_write_bytes(str(private / "card.bin"), b"card")
+            file_owner_sid, file_dacl_sddl = _windows_security_diagnostic(committed)
+            print("WINDOWS_SECURITY_DIAGNOSTIC path=%r owner_sid=%r dacl_sddl=%r" % (str(private), owner_sid, dacl_sddl))
+            print("WINDOWS_SECURITY_DIAGNOSTIC path=%r owner_sid=%r dacl_sddl=%r" % (str(committed), file_owner_sid, file_dacl_sddl))
+            self.assertTrue(owner_only_dacl_valid(private))
             self.assertTrue(owner_only_dacl_valid(committed))
 
     def test_windows_library_loading_uses_system_directory(self):
