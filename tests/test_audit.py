@@ -351,23 +351,14 @@ class PersistenceTests(unittest.TestCase):
 
     def test_legacy_qsettings_key_is_migrated_and_removed(self):
         with tempfile.TemporaryDirectory() as directory:
-            current = QSettings(str(Path(directory) / "current.ini"), QSettings.Format.IniFormat)
-            legacy = QSettings(str(Path(directory) / "legacy.ini"), QSettings.Format.IniFormat)
+            settings_directory = Path(directory) / "settings"
+            settings_directory.mkdir()
+            current = QSettings(str(settings_directory / "current.ini"), QSettings.Format.IniFormat)
+            legacy = QSettings(str(settings_directory / "legacy.ini"), QSettings.Format.IniFormat)
             current.setValue("apiKey", "legacy-key")
             current.sync()
-            store = SecretStore(directory)
+            store = SecretStore(str(Path(directory) / "secrets"))
             value, error = migrate_legacy_api_keys(current, legacy, store)
-            print(
-                "QSETTINGS_MIGRATION current_status=%r legacy_status=%r current_contains=%r legacy_contains=%r current_exists=%r legacy_exists=%r"
-                % (
-                    current.status(),
-                    legacy.status(),
-                    current.contains("apiKey"),
-                    legacy.contains("apiKey"),
-                    Path(current.fileName()).exists(),
-                    Path(legacy.fileName()).exists(),
-                )
-            )
             self.assertEqual(value, "legacy-key")
             self.assertEqual(error, "")
             self.assertFalse(current.contains("apiKey"))
