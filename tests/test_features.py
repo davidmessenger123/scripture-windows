@@ -230,14 +230,17 @@ class SecurityPlatformTests(unittest.TestCase):
         self.assertIn("_SE_FILE_OBJECT", secure_source)
         self.assertNotIn("SetKernelObjectSecurity", secure_source)
         self.assertNotIn("_SE_KERNEL_OBJECT", secure_source)
-        self.assertIn("GetAce", secure_source)
-        self.assertIn("EqualSid", secure_source)
-        self.assertIn("FILE_ALL_ACCESS", secure_source)
-        self.assertIn("ACCESS_ALLOWED_ACE_TYPE", secure_source)
-        self.assertIn("get_ace(dacl, 1", secure_source)
-        self.assertIn("_SE_DACL_PROTECTED", secure_source)
+        self.assertIn("ConvertSecurityDescriptorToStringSecurityDescriptorW", secure_source)
+        self.assertIn("D:P(A;;FA;;;%s)", secure_source)
+        self.assertIn("ConvertSidToStringSidW", secure_source)
+        self.assertNotIn("GetSecurityDescriptorControl", secure_source)
+        self.assertNotIn("GetAce", secure_source)
         self.assertIn("PROTECTED_DACL_SECURITY_INFORMATION", secure_source)
         self.assertIn("FlushFileBuffers", secure_source)
+        self.assertIn("secure_atomic_write_bytes", secure_source)
+        self.assertIn("CreateFileW", secure_source)
+        self.assertIn("_CREATE_NEW", secure_source)
+        self.assertIn("_GENERIC_READ | _GENERIC_WRITE | _READ_CONTROL | _WRITE_DAC", secure_source)
         self.assertIn("_GENERIC_READ | _GENERIC_WRITE", secure_source)
         self.assertIn("_GENERIC_READ = 0x80000000", secure_source)
         self.assertNotIn("SystemRoot", secrets_source)
@@ -324,6 +327,28 @@ class SecurityPlatformTests(unittest.TestCase):
             secure_files_module._restrict_handle_windows(99)
         free_descriptor.assert_called_once_with(descriptor)
         self.assertTrue(any(call[0] == "set_security_info" for call in calls if isinstance(call, tuple)))
+        canonical = type("CanonicalAdvapi", (), {})()
+        canonical.ConvertSidToStringSidW = Function(lambda sid, text: setattr(text._obj, "value", "S-1-5-21") or 1)
+        canonical.ConvertSecurityDescriptorToStringSecurityDescriptorW = Function(
+            lambda descriptor, info, revision, text, length: setattr(text._obj, "value", "D:P(A;;FA;;;S-1-5-21)") or 1
+        )
+        canonical_free = mock.Mock()
+        with mock.patch.object(secure_files_module, "windows_system_library", return_value=canonical):
+            self.assertTrue(
+                secure_files_module._descriptor_owner_only_valid(
+                    ctypes.c_void_p(1), ctypes.c_void_p(2), ctypes.c_void_p(3), canonical_free
+                )
+            )
+            canonical.ConvertSecurityDescriptorToStringSecurityDescriptorW = Function(
+                lambda descriptor, info, revision, text, length: setattr(
+                    text._obj, "value", "D:P(A;;FA;;;S-1-5-21)(A;;FA;;;S-1-5-22)"
+                ) or 1
+            )
+            self.assertFalse(
+                secure_files_module._descriptor_owner_only_valid(
+                    ctypes.c_void_p(1), ctypes.c_void_p(2), ctypes.c_void_p(3), canonical_free
+                )
+            )
     def test_taxonomy_uses_only_the_curated_deck(self):
         self.assertEqual(len(references.SCRIPTURE), 185)
         self.assertEqual(len(set(references.SCRIPTURE)), 185)
@@ -528,8 +553,8 @@ class SharingTests(unittest.TestCase):
 
     def test_atomic_png_save_and_safe_filename(self):
         sharing_source = Path(__file__).parents[1].joinpath("src", "scripture", "sharing.py").read_text(encoding="utf-8")
-        self.assertIn("QSaveFile", sharing_source)
-        self.assertIn("committed = False", sharing_source)
+        self.assertIn("secure_atomic_write_bytes", sharing_source)
+        self.assertNotIn("QSaveFile", sharing_source)
         self.assertNotIn("mkstemp", sharing_source)
         text = format_plain_text("", "For God so loved the world.", "", "John 3:16", "WEB")
         image = render_card(text)
@@ -551,7 +576,7 @@ class SharingTests(unittest.TestCase):
         image = render_card(text)
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "card.png"
-            with mock.patch("scripture.sharing.restrict_handle_owner_only", side_effect=OSError("denied")):
+            with mock.patch("scripture.sharing.secure_atomic_write_bytes", side_effect=OSError("denied")):
                 with self.assertRaises(ShareError):
                     save_card_atomic(image, path)
             self.assertFalse(path.exists())

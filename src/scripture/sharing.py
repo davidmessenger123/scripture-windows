@@ -3,19 +3,11 @@ import os
 import re
 from pathlib import Path
 
-from PySide6.QtCore import QBuffer, QByteArray, QFileDevice, QIODevice, QMimeData, QRectF, QSaveFile, QStandardPaths, Qt
+from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QMimeData, QRectF, QStandardPaths, Qt
 from PySide6.QtGui import QColor, QFont, QGuiApplication, QImage, QImageReader, QPainter, QPen
 from PySide6.QtWidgets import QFileDialog
 
-from .secure_files import (
-    create_owner_only_directory,
-    descriptor_identity,
-    fsync_directory,
-    open_file_no_follow,
-    owner_only_handle_valid,
-    restrict_handle_owner_only,
-    windows_handle_identity,
-)
+from .secure_files import create_owner_only_directory, secure_atomic_write_bytes
 
 CARD_WIDTH = 1080
 CARD_HEIGHT = 1350
@@ -203,40 +195,10 @@ def save_card_atomic(image: QImage, path) -> str:
     destination = parent / target.name
     if destination.is_symlink() or (destination.exists() and destination.is_dir()):
         raise ShareError("card destination is unavailable")
-    writer = None
-    committed = False
     try:
-        writer = QSaveFile(str(destination))
-        writer.setDirectWriteFallback(False)
-        if not writer.open(QIODevice.OpenModeFlag.WriteOnly):
-            raise ShareError("could not open the verse card destination")
-        writer.setPermissions(QFileDevice.Permission.ReadOwner | QFileDevice.Permission.WriteOwner)
-        native_handle = int(writer.handle())
-        if native_handle < 0:
-            raise ShareError("could not access the verse card temporary file")
-        restrict_handle_owner_only(native_handle)
-        identity = windows_handle_identity(native_handle) if os.name == "nt" else descriptor_identity(native_handle)
-        if writer.write(data) != len(data) or not writer.commit():
-            raise ShareError("could not save the verse card")
-        committed = True
-        fd = open_file_no_follow(destination, os.O_RDONLY)
-        try:
-            if descriptor_identity(fd) != identity or not owner_only_handle_valid(fd):
-                raise ShareError("committed verse card identity or permissions changed")
-        finally:
-            os.close(fd)
-        fsync_directory(parent)
-    except ShareError:
-        raise
+        return secure_atomic_write_bytes(str(destination), bytes(data))
     except Exception as exc:
         raise ShareError("could not save the verse card") from exc
-    finally:
-        if writer is not None and not committed:
-            try:
-                writer.cancelWriting()
-            except Exception:
-                pass
-    return str(destination)
 
 
 def default_filename(reference: str) -> str:

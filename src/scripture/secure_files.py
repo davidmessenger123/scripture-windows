@@ -1,6 +1,8 @@
 import ctypes
 import os
+import secrets
 import stat
+import tempfile
 from ctypes import wintypes
 from pathlib import Path
 
@@ -11,7 +13,6 @@ _SDDL_REVISION_1 = 1
 _TOKEN_QUERY = 0x0008
 _TOKEN_USER = 1
 _ERROR_INSUFFICIENT_BUFFER = 122
-_ERROR_INVALID_PARAMETER = 87
 _GENERIC_READ = 0x80000000
 _GENERIC_WRITE = 0x40000000
 _READ_CONTROL = 0x00020000
@@ -20,29 +21,19 @@ _FILE_SHARE_READ = 0x00000001
 _FILE_SHARE_WRITE = 0x00000002
 _FILE_SHARE_DELETE = 0x00000004
 _OPEN_EXISTING = 3
+_CREATE_NEW = 1
+_CREATE_ALWAYS = 2
 _FILE_ATTRIBUTE_DIRECTORY = 0x00000010
+_FILE_ATTRIBUTE_TEMPORARY = 0x00000100
 _FILE_ATTRIBUTE_REPARSE_POINT = 0x00000400
 _FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
 _FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
 _SE_FILE_OBJECT = 1
-_SE_DACL_PROTECTED = 0x00001000
-_ACCESS_ALLOWED_ACE_TYPE = 0x0000
-_FILE_ALL_ACCESS = 0x001F01FF
 _INVALID_HANDLE_VALUE = wintypes.HANDLE(-1).value
 
 
 class TOKEN_USER_STRUCT(ctypes.Structure):
     _fields_ = [("Sid", ctypes.POINTER(ctypes.c_ubyte)), ("Attributes", wintypes.DWORD)]
-
-
-class ACCESS_ALLOWED_ACE_STRUCT(ctypes.Structure):
-    _fields_ = [
-        ("Type", ctypes.c_ubyte),
-        ("Flags", ctypes.c_ubyte),
-        ("Size", wintypes.WORD),
-        ("Mask", wintypes.DWORD),
-        ("SidStart", ctypes.POINTER(ctypes.c_ubyte)),
-    ]
 
 
 class BY_HANDLE_FILE_INFORMATION_STRUCT(ctypes.Structure):
@@ -183,41 +174,43 @@ def _owner_only_descriptor():
             close_handle(token)
 
 
-def _descriptor_owner_only_valid(descriptor, owner, dacl, expected_sid) -> bool:
-    if not descriptor or not owner or not dacl or not expected_sid:
+def _descriptor_owner_only_valid(descriptor, owner, dacl, local_free) -> bool:
+    if not descriptor or not owner or not dacl or not local_free:
         return False
     advapi32 = windows_system_library("advapi32.dll")
-    get_security_descriptor_control = advapi32.GetSecurityDescriptorControl
-    get_security_descriptor_control.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.WORD), ctypes.POINTER(wintypes.DWORD)]
-    get_security_descriptor_control.restype = wintypes.BOOL
-    equal_sid = advapi32.EqualSid
-    equal_sid.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
-    equal_sid.restype = wintypes.BOOL
-    get_ace = advapi32.GetAce
-    get_ace.argtypes = [ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(ctypes.c_void_p)]
-    get_ace.restype = wintypes.BOOL
-    control = wintypes.WORD()
-    revision = wintypes.DWORD()
-    if not get_security_descriptor_control(descriptor, ctypes.byref(control), ctypes.byref(revision)):
-        return False
-    if not control.value & _SE_DACL_PROTECTED or not equal_sid(owner, expected_sid):
-        return False
-    first = ctypes.c_void_p()
-    if not get_ace(dacl, 0, ctypes.byref(first)) or not first:
-        return False
-    extra = ctypes.c_void_p()
-    if get_ace(dacl, 1, ctypes.byref(extra)):
-        return False
-    error = ctypes.get_last_error()
-    if error != _ERROR_INVALID_PARAMETER:
-        return False
-    ace = ctypes.cast(first, ctypes.POINTER(ACCESS_ALLOWED_ACE_STRUCT)).contents
-    return bool(
-        ace.Type == _ACCESS_ALLOWED_ACE_TYPE
-        and ace.Flags == 0
-        and ace.Mask == _FILE_ALL_ACCESS
-        and equal_sid(ace.SidStart, expected_sid)
-    )
+    convert_sid = advapi32.ConvertSidToStringSidW
+    convert_sid.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.LPWSTR)]
+    convert_sid.restype = wintypes.BOOL
+    convert_descriptor = advapi32.ConvertSecurityDescriptorToStringSecurityDescriptorW
+    convert_descriptor.argtypes = [
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.LPWSTR),
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    convert_descriptor.restype = wintypes.BOOL
+    owner_string = wintypes.LPWSTR()
+    dacl_string = wintypes.LPWSTR()
+    string_length = wintypes.DWORD()
+    try:
+        if not convert_sid(owner, ctypes.byref(owner_string)):
+            return False
+        if not convert_descriptor(
+            descriptor,
+            _DACL_SECURITY_INFORMATION,
+            _SDDL_REVISION_1,
+            ctypes.byref(dacl_string),
+            ctypes.byref(string_length),
+        ):
+            return False
+        expected = "D:P(A;;FA;;;%s)" % owner_string.value
+        return str(dacl_string.value or "") == expected
+    finally:
+        if owner_string:
+            local_free(owner_string)
+        if dacl_string:
+            local_free(dacl_string)
 
 
 def _windows_handle_path(path: str):
@@ -402,7 +395,7 @@ def owner_only_handle_valid(handle: int) -> bool:
     try:
         current = _current_user_sid()
         _advapi32, _kernel32, token, sid, sid_text, local_free, close_handle = current
-        return status == 0 and _descriptor_owner_only_valid(descriptor, owner, dacl, sid)
+        return status == 0 and _descriptor_owner_only_valid(descriptor, owner, dacl, local_free)
     except (AttributeError, OSError, TypeError, ValueError, ctypes.ArgumentError):
         return False
     finally:
@@ -588,6 +581,142 @@ def secure_replace(temp_path: str, destination: str, expected_identity: tuple, d
     finally:
         os.close(fd)
     fsync_directory(directory)
+
+
+def secure_atomic_write_bytes(destination: str, data: bytes) -> str:
+    target = _validated_path(destination)
+    payload = bytes(data)
+    if not payload or len(payload) > 64 * 1024 * 1024:
+        raise OSError("secure atomic payload is invalid")
+    parent = os.path.dirname(target)
+    if not parent or not os.path.isdir(parent):
+        raise OSError("secure atomic parent is unavailable")
+    try:
+        existing = os.lstat(target)
+    except FileNotFoundError:
+        existing = None
+    except OSError as exc:
+        raise OSError("could not inspect secure atomic destination") from exc
+    if existing is not None:
+        attributes = getattr(existing, "st_file_attributes", 0)
+        if stat.S_ISLNK(existing.st_mode) or attributes & _FILE_ATTRIBUTE_REPARSE_POINT or stat.S_ISDIR(existing.st_mode):
+            raise OSError("secure atomic destination is unavailable")
+    if os.name != "nt":
+        fd = -1
+        temp_path = ""
+        try:
+            fd, temp_path = tempfile.mkstemp(prefix=".secure-write.", suffix=".tmp", dir=parent)
+            restrict_handle_owner_only(fd)
+            identity = descriptor_identity(fd)
+            buffer = memoryview(payload)
+            while buffer:
+                written = os.write(fd, buffer)
+                if written <= 0:
+                    raise OSError("secure atomic write failed")
+                buffer = buffer[written:]
+            os.fsync(fd)
+            os.close(fd)
+            fd = -1
+            secure_replace(temp_path, target, identity, parent)
+            temp_path = ""
+        finally:
+            if fd >= 0:
+                os.close(fd)
+            if temp_path:
+                try:
+                    os.unlink(temp_path)
+                except OSError:
+                    pass
+        return target
+    kernel32 = windows_system_library("kernel32.dll")
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    create_file.restype = wintypes.HANDLE
+    write_file = kernel32.WriteFile
+    write_file.argtypes = [wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD), ctypes.c_void_p]
+    write_file.restype = wintypes.BOOL
+    flush = kernel32.FlushFileBuffers
+    flush.argtypes = [wintypes.HANDLE]
+    flush.restype = wintypes.BOOL
+    close_handle = kernel32.CloseHandle
+    close_handle.argtypes = [wintypes.HANDLE]
+    close_handle.restype = wintypes.BOOL
+    handle = None
+    temp_path = ""
+    for _attempt in range(32):
+        candidate = os.path.join(parent, ".secure-write-%s.tmp" % secrets.token_hex(16))
+        handle = create_file(
+            candidate,
+            _GENERIC_READ | _GENERIC_WRITE | _READ_CONTROL | _WRITE_DAC,
+            0,
+            None,
+            _CREATE_NEW,
+            _FILE_ATTRIBUTE_TEMPORARY,
+            None,
+        )
+        if handle != _INVALID_HANDLE_VALUE and handle:
+            temp_path = candidate
+            break
+        error = ctypes.get_last_error()
+        if error not in {80, 183}:
+            raise ctypes.WinError(error)
+    if handle is None or handle == _INVALID_HANDLE_VALUE:
+        raise OSError("could not create a secure temporary file")
+    try:
+        _restrict_handle_windows(int(handle))
+        identity = windows_handle_identity(int(handle))
+        buffer = ctypes.create_string_buffer(payload, len(payload))
+        offset = 0
+        while offset < len(payload):
+            written = wintypes.DWORD()
+            if not write_file(
+                wintypes.HANDLE(handle),
+                ctypes.byref(buffer, offset),
+                len(payload) - offset,
+                ctypes.byref(written),
+                None,
+            ) or written.value <= 0:
+                raise ctypes.WinError(ctypes.get_last_error())
+            offset += written.value
+        if not flush(wintypes.HANDLE(handle)):
+            raise ctypes.WinError(ctypes.get_last_error())
+    except Exception:
+        try:
+            close_handle(handle)
+        finally:
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
+        raise
+    else:
+        close_handle(handle)
+    try:
+        os.replace(temp_path, target)
+        temp_path = ""
+        fd = open_file_no_follow(target, os.O_RDONLY)
+        try:
+            if descriptor_identity(fd) != identity or not owner_only_handle_valid(fd):
+                raise OSError("committed secure file identity or permissions changed")
+        finally:
+            os.close(fd)
+        fsync_directory(parent)
+    except OSError:
+        if temp_path:
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
+        raise
+    return target
 
 
 def fsync_directory(path: str) -> None:
