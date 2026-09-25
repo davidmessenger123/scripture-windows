@@ -21,6 +21,7 @@ from PySide6.QtGui import QDesktopServices
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 
 from . import __version__
+from .secure_files import windows_system_library
 
 REPO = "davidmessenger123/scripture-windows"
 API_URL = "https://api.github.com/repos/" + REPO + "/releases/latest"
@@ -878,8 +879,7 @@ def _open_windows_process(pid: int):
         import ctypes
         from ctypes import wintypes
 
-        system_root = os.environ.get("SystemRoot", r"C:\Windows")
-        kernel32 = ctypes.WinDLL(os.path.join(system_root, "System32", "kernel32.dll"), use_last_error=True)
+        kernel32 = windows_system_library("kernel32.dll")
         kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
         kernel32.OpenProcess.restype = wintypes.HANDLE
         kernel32.GetProcessTimes.argtypes = [
@@ -991,8 +991,7 @@ def _pid_alive(pid: int) -> bool:
     if os.name == "nt":
         import ctypes
 
-        system_root = os.environ.get("SystemRoot", r"C:\Windows")
-        kernel32 = ctypes.WinDLL(os.path.join(system_root, "System32", "kernel32.dll"), use_last_error=True)
+        kernel32 = windows_system_library("kernel32.dll")
         kernel32.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
         kernel32.OpenProcess.restype = ctypes.c_void_p
         kernel32.GetExitCodeProcess.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32)]

@@ -15,6 +15,20 @@ import re
 # bounds a misbehaving endpoint without ever trimming a real response.
 MAX_RESPONSE_BYTES = 262144
 MAX_REFERENCE_BYTES = 120
+ESV_LEGAL_SUFFIXES = (
+    "Scripture quotations are from the ESV® Bible (The Holy Bible, English Standard Version®), copyright 2001 by Crossway. Used by permission. All rights reserved. esv.org",
+    "Scripture quotations are from the ESV® Bible (The Holy Bible, English Standard Version®), © 2001 by Crossway. Used by permission. All rights reserved. esv.org",
+)
+ESV_LEGAL_START_RE = re.compile(
+    r"scripture quotations(?:\s+are)?\s+from\s+the\s+esv|"
+    r"(?:the\s+)?esv®?\s+bible(?:\s*\(|\b)|"
+    r"the\s+holy\s+bible,\s+english\s+standard\s+version|"
+    r"copyright(?:\s+©|\s+&copy;)?\s*,?\s*(?:19|20)\d{2}\s+by\s+crossway|"
+    r"©\s*(?:19|20)\d{2}\s*(?:by\s+)?crossway|"
+    r"english\s+standard\s+version(?:\s*\([^)]*\))?|"
+    r"esv®?\s+copyright",
+    re.IGNORECASE,
+)
 
 # Well-known, always-valid references drawn across the whole Bible. Random
 # picks are drawn from this deck so a request can never throw a nonexistent
@@ -87,9 +101,48 @@ SCRIPTURE = [
     "Revelation 3:20", "Revelation 21:4", "Revelation 22:20",
 ]
 
+TOPIC_REFERENCES = {
+    "Courage": frozenset({
+        "Genesis 28:15", "Exodus 14:14", "Joshua 1:9", "Judges 6:24", "2 Kings 19:19",
+        "Psalm 46:1", "Psalm 46:10", "Isaiah 41:10", "Isaiah 41:13", "Isaiah 43:2",
+        "Jeremiah 29:11", "Acts 1:8", "2 Corinthians 12:9", "Hebrews 12:2", "Hebrews 13:8",
+    }),
+    "Faith": frozenset({
+        "Genesis 12:2", "Deuteronomy 31:6", "Joshua 1:9", "Habakkuk 3:19", "Matthew 7:7",
+        "Mark 9:23", "Mark 11:24", "John 3:16", "John 10:10", "Acts 16:31", "Romans 10:9",
+        "2 Corinthians 5:17", "Hebrews 11:1", "Hebrews 11:6",
+    }),
+    "Hope": frozenset({
+        "Isaiah 40:8", "Isaiah 40:31", "Lamentations 3:22", "Haggai 2:4", "Romans 8:28",
+        "Romans 15:13", "Philippians 4:6", "1 Thessalonians 5:16", "Hebrews 11:1", "Revelation 21:4",
+    }),
+    "Love": frozenset({
+        "Genesis 1:27", "Genesis 2:18", "Leviticus 19:18", "John 1:29", "John 13:34",
+        "John 15:5", "Romans 12:2", "Romans 15:13", "1 Corinthians 13:4", "1 John 4:19",
+        "1 John 4:7",
+    }),
+    "Mission": frozenset({
+        "Genesis 12:2", "Exodus 33:14", "Isaiah 43:2", "Matthew 28:20", "Luke 12:32",
+        "Romans 12:2", "1 Corinthians 10:13", "1 Peter 2:9", "2 Peter 3:9",
+    }),
+    "Prayer": frozenset({
+        "Psalm 34:8", "Psalm 91:1", "Psalm 119:105", "Philippians 4:6", "1 Thessalonians 5:16",
+        "1 Thessalonians 5:18", "2 Thessalonians 3:3", "1 Timothy 2:5", "1 Timothy 4:12",
+        "1 Timothy 6:12", "James 1:5", "James 4:10", "1 John 5:14",
+    }),
+    "Wisdom": frozenset({
+        "Proverbs 3:5", "Proverbs 3:6", "Proverbs 16:3", "Proverbs 17:17", "Proverbs 18:10",
+        "Proverbs 27:17", "Ecclesiastes 3:1", "Ecclesiastes 12:13", "Isaiah 58:11", "James 1:5",
+        "James 1:17", "James 2:17", "James 4:8", "James 4:10", "2 Timothy 3:16",
+    }),
+}
+TOPICS = tuple(TOPIC_REFERENCES)
+BOOKS = tuple(dict.fromkeys(reference.rsplit(" ", 1)[0] for reference in SCRIPTURE))
+
 _REFERENCE = re.compile(
     r"^(?:[1-3]\s+)?[A-Za-z]+(?:\s+[A-Za-z]+)*\s+(\d{1,3}):(\d{1,3})(?:-(\d{1,3}))?$"
 )
+_BOOK = re.compile(r"^(.*?)\s+\d+:\d+(?:-\d+)?$")
 _RANGE = re.compile(r"^(.*?)\s+(\d+):(\d+)$")
 _FOCAL = re.compile(r"^.*?\s+\d+:(\d+)$")
 _VERSE_MARKER = re.compile(r"\[(\d+)\]([\s\S]*?)(?=\[\d+\]|$)", re.DOTALL)
@@ -119,6 +172,50 @@ def normalize_reference(value: str) -> str:
 
 def is_valid_reference(value: str) -> bool:
     return bool(normalize_reference(value))
+
+
+def book_for_reference(value: str) -> str:
+    normalized = normalize_reference(value)
+    match = _BOOK.fullmatch(normalized or "")
+    return match.group(1) if match else ""
+
+
+def topics_for_reference(value: str) -> tuple:
+    normalized = normalize_reference(value)
+    if not normalized:
+        return ()
+    return tuple(topic for topic in TOPICS if normalized in TOPIC_REFERENCES[topic])
+
+
+def compact_translation_name(value: str, limit: int = 64) -> str:
+    text = "".join(char for char in str(value or "") if ord(char) >= 32 and ord(char) != 127)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:max(1, min(int(limit), 128))].strip()
+
+
+def expected_translation_name(provider: str) -> str:
+    names = {"esv": "English Standard Version", "kjv": "King James Version", "web": "World English Bible"}
+    selected = str(provider or "").strip().lower()
+    if selected not in names:
+        raise ValueError("unsupported provider")
+    return names[selected]
+
+
+def filtered_references(book: str = "", topic: str = "") -> list:
+    selected_book = str(book or "").strip()
+    selected_topic = str(topic or "").strip()
+    if selected_book and selected_book not in BOOKS:
+        return []
+    if selected_topic and selected_topic not in TOPICS:
+        return []
+    result = []
+    for reference in SCRIPTURE:
+        if selected_book and book_for_reference(reference) != selected_book:
+            continue
+        if selected_topic and reference not in TOPIC_REFERENCES[selected_topic]:
+            continue
+        result.append(reference)
+    return result
 
 
 class Deck:
@@ -153,6 +250,72 @@ class Deck:
             reference = self._deck[self._pos % len(self._deck)]
             self._pos += 1
         return reference
+
+
+def _normalized_legal_text(value: str) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip().lower()
+
+
+def _esv_legal_block(value: str, require_complete: bool = True) -> bool:
+    text = _normalized_legal_text(value)
+    if not text or len(text.encode("utf-8")) > 16384 or not ESV_LEGAL_START_RE.search(text):
+        return False
+    strong = (
+        "crossway",
+        "used by permission",
+        "all rights reserved",
+        "esv.org",
+        "english standard version",
+        "copyright",
+        "esv bible",
+        "scripture quotations",
+        "esv",
+    )
+    if not any(marker in text for marker in strong):
+        return False
+    if require_complete and re.search(r"\[\d+\]", text):
+        return False
+    return True
+
+
+def strip_esv_legal_suffix(raw: str, copyright_text: str = "", attribution_text: str = "") -> str:
+    text = (raw or "").replace("\r\n", "\n").strip()
+    suffixes = []
+    for value in (copyright_text, attribution_text, *ESV_LEGAL_SUFFIXES):
+        candidate = re.sub(r"[ \t]+", " ", str(value or "")).strip()
+        if candidate and candidate not in suffixes:
+            suffixes.append(candidate)
+    changed = True
+    while changed:
+        changed = False
+        for suffix in suffixes:
+            if text.endswith(suffix):
+                text = text[:-len(suffix)].rstrip(" \n\r\t")
+                changed = True
+        matches = list(ESV_LEGAL_START_RE.finditer(text))
+        for match in reversed(matches):
+            candidate = text[match.start():].strip()
+            if _esv_legal_block(candidate):
+                text = text[:match.start()].rstrip(" \n\r\t")
+                changed = True
+                break
+    return text
+
+
+def esv_legal_text_present(raw: str) -> bool:
+    value = str(raw or "")
+    normalized = _normalized_legal_text(value)
+    if any(marker in normalized for marker in (
+        "scripture quotations",
+        "crossway",
+        "used by permission",
+        "all rights reserved",
+        "esv.org",
+        "english standard version",
+        "copyright",
+    )):
+        return True
+    return any(_esv_legal_block(value[match.start():], False) for match in ESV_LEGAL_START_RE.finditer(value))
 
 
 def clean_esv_text(raw: str, reference: str) -> str:

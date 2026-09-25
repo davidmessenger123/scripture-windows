@@ -413,13 +413,13 @@ class SchemaTests(unittest.TestCase):
             parse_json("[]")
         with self.assertRaises(ValueError):
             parse_json("not json")
-        self.assertTrue(valid_esv_payload({"passages": ["[1] text"]}))
+        self.assertTrue(valid_esv_payload({"canonical": "John 3:16", "passages": ["[1] text"]}))
         self.assertFalse(valid_esv_payload({"passages": [{"text": "bad"}]}))
-        self.assertTrue(valid_web_payload({"verses": [{"verse": 1, "text": "text"}]}))
+        self.assertTrue(valid_web_payload({"reference": "John 3:16", "verses": [{"verse": 1, "text": "text"}]}))
         self.assertFalse(valid_web_payload({"verses": [{"verse": 1}]}))
         self.assertFalse(valid_web_payload({"verses": [{"verse": True, "text": "text"}]}))
-        self.assertEqual(esv_attribution({"copyright": " ", "attribution": "Provider terms"}), "Provider terms")
-        self.assertIn("ESV", esv_attribution({}))
+        self.assertEqual(esv_attribution({"copyright": "Provider terms", "attribution": "Provider terms"}), "")
+        self.assertEqual(esv_attribution({}), "")
 
     def test_reference_urls_encode_delimiters_and_reject_injection(self):
         url = references.browser_url("1 John 1:7", "web")

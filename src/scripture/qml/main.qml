@@ -16,6 +16,11 @@ Window {
     flags: Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
     color: "transparent"
 
+    function animationDuration(base) {
+        const speed = App.settingsAnimationSpeed
+        return speed <= 0 ? 0 : Math.max(1, Math.round(base / speed))
+    }
+
     onVisibleChanged: if (visible) {
         // Fill the screen geometry manually rather than entering a native
         // full-screen Space. On macOS, Window.FullScreen maps to a Spaces
@@ -122,7 +127,7 @@ Window {
             Rectangle {
                 id: scrim
                 anchors.fill: parent
-                color: Qt.rgba(0, 0, 0, 0.78)
+                color: Qt.rgba(0, 0, 0, App.settingsScrimOpacity)
             }
 
             // Bare-scrim click dismisses; everything inside the cluster is swallowed.
@@ -138,7 +143,7 @@ Window {
                 anchors.leftMargin: 64
                 anchors.verticalCenter: parent.verticalCenter
                 opacity: App.loading ? 0.45 : 1
-                Behavior on opacity { NumberAnimation { duration: 300; easing.type: Easing.OutCubic } }
+                Behavior on opacity { NumberAnimation { duration: overlay.animationDuration(300); easing.type: Easing.OutCubic } }
             }
 
             CrossMark {
@@ -148,7 +153,7 @@ Window {
                 anchors.verticalCenter: parent.verticalCenter
                 cr: Qt.rgba(1, 1, 1, 0.55)
                 opacity: App.loading ? 0.45 : 1
-                Behavior on opacity { NumberAnimation { duration: 300; easing.type: Easing.OutCubic } }
+                Behavior on opacity { NumberAnimation { duration: overlay.animationDuration(300); easing.type: Easing.OutCubic } }
             }
 
             // Content cluster, auto-scaled to fit the screen.
@@ -184,19 +189,6 @@ Window {
                         horizontalAlignment: Text.AlignHCenter
                     }
 
-                    Text {
-                        Layout.alignment: Qt.AlignHCenter
-                        visible: App.translationAttribution !== ""
-                        textFormat: Text.PlainText
-                        text: App.translationAttribution
-                        color: Qt.rgba(1, 1, 1, 0.45)
-                        font.family: "Segoe UI"
-                        font.pixelSize: 9
-                        wrapMode: Text.Wrap
-                        horizontalAlignment: Text.AlignHCenter
-                    }
-
-
                     // B — verse text with typewriter reveal (rich text)
                     Text {
                         Layout.alignment: Qt.AlignHCenter
@@ -205,13 +197,13 @@ Window {
                         textFormat: Text.RichText
                         color: "white"
                         font.family: "Segoe UI"
-                        font.pixelSize: 28
+                        font.pixelSize: App.settingsVerseFontPx
                         font.weight: Font.Light
                         lineHeight: 1.55
                         wrapMode: Text.Wrap
                         horizontalAlignment: Text.AlignHCenter
                         opacity: App.loading ? 0.45 : 1
-                        Behavior on opacity { NumberAnimation { duration: 300; easing.type: Easing.OutCubic } }
+                        Behavior on opacity { NumberAnimation { duration: overlay.animationDuration(300); easing.type: Easing.OutCubic } }
                     }
 
                     // C — verse reference (the only accent on the overlay)
@@ -252,7 +244,7 @@ Window {
                             enabled: !App.loading
                             onClicked: App.refresh()
                             opacity: App.loading ? 0 : 1
-                            Behavior on opacity { NumberAnimation { duration: 240 } }
+                            Behavior on opacity { NumberAnimation { duration: overlay.animationDuration(240) } }
                         }
                         OverlayButton {
                             text: App.starSymbol
@@ -267,6 +259,33 @@ Window {
                             fg: Qt.rgba(1, 1, 1, 0.55)
                             enabled: App.verseReference !== ""
                             onClicked: App.open_in_browser(App.verseReference)
+                        }
+                        OverlayButton {
+                            text: "Share"
+                            tip: "Copy passage, reference, and translation; provider legal text is omitted"
+                            fg: Qt.rgba(1, 1, 1, 0.55)
+                            enabled: App.hasContent
+                            onClicked: shareMenu.popup()
+                        }
+                    }
+
+                    Menu {
+                        id: shareMenu
+                        MenuItem {
+                            text: "Copy verse text"
+                            onTriggered: App.copy_verse_text()
+                        }
+                        MenuItem {
+                            text: "Copy verse card"
+                            onTriggered: App.copy_verse_card()
+                        }
+                        MenuItem {
+                            text: "Save verse card…"
+                            onTriggered: App.save_verse_card()
+                        }
+                        MenuItem {
+                            text: "Share verse card"
+                            onTriggered: App.share_verse_card()
                         }
                     }
 
@@ -418,6 +437,18 @@ Window {
                         Layout.maximumWidth: 440
                         visible: App.fetchNotice !== ""
                         text: App.fetchNotice
+                        color: Qt.rgba(1, 1, 1, 0.55)
+                        font.family: "Segoe UI"
+                        font.pixelSize: 10
+                        wrapMode: Text.Wrap
+                        horizontalAlignment: Text.AlignHCenter
+                    }
+
+                    Text {
+                        Layout.alignment: Qt.AlignHCenter
+                        Layout.maximumWidth: 440
+                        visible: App.actionNotice !== ""
+                        text: App.actionNotice
                         color: Qt.rgba(1, 1, 1, 0.55)
                         font.family: "Segoe UI"
                         font.pixelSize: 10

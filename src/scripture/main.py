@@ -12,8 +12,11 @@ import os
 import sys
 import tempfile
 import traceback
+from collections import deque
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import Lock
 
 from PySide6.QtCore import QMetaObject, QStandardPaths, QTimer, QUrl, Qt
 from PySide6.QtGui import QAction, QCloseEvent, QColor, QIcon, QPainter, QPen, QPixmap
@@ -23,6 +26,7 @@ from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from . import __version__
 from .controller import AppController
+from .secure_files import create_owner_only_directory, restrict_owner_only
 from .single_instance import SingleInstance
 from .updater import UpdateChecker, cleanup_stale_update_helpers, recover_interrupted_update, run_update_helper
 
@@ -57,11 +61,12 @@ def _startup_log(message: str) -> None:
         if not base:
             return
         path = Path(base) / STARTUP_LOG_NAME
-        path.parent.mkdir(parents=True, exist_ok=True)
+        create_owner_only_directory(path.parent)
         _rotate_startup_log(path)
         stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
         with open(path, "a", encoding="utf-8") as fh:
             fh.write("[%s] %s\n" % (stamp, str(message).rstrip()))
+        restrict_owner_only(path)
     except OSError:
         pass
 
@@ -201,6 +206,76 @@ def _remove_file(path: str) -> None:
             Path(path).parent.rmdir()
         except OSError:
             pass
+
+
+@dataclass(frozen=True)
+class TrayNotification:
+    kind: str
+    reference: str = ""
+    snapshot: object = None
+    update_tag: str = ""
+
+
+class TrayNotificationRouter:
+    def __init__(self, controller, checker):
+        self._controller = controller
+        self._checker = checker
+        self._queue = deque()
+        self._current = None
+        self._handling = False
+        self._lock = Lock()
+
+    def enqueue(self, kind: str, reference: str = "", snapshot=None, update_tag: str = "") -> TrayNotification:
+        item = TrayNotification(str(kind or ""), str(reference or ""), snapshot, str(update_tag or ""))
+        with self._lock:
+            self._queue.append(item)
+        return item
+
+    def set_pending(self, kind: str) -> TrayNotification:
+        return self.enqueue(kind)
+
+    def activate_next(self):
+        with self._lock:
+            if self._current is not None or not self._queue:
+                return None
+            self._current = self._queue.popleft()
+            return self._current
+
+    def expire(self, item: TrayNotification) -> bool:
+        with self._lock:
+            if self._current is not item:
+                return False
+            self._current = None
+            return True
+
+    def click(self) -> None:
+        with self._lock:
+            if self._handling or self._current is None:
+                return
+            item = self._current
+            self._current = None
+            self._handling = True
+        try:
+            _route_tray_click(item, self._controller, self._checker)
+        finally:
+            with self._lock:
+                self._handling = False
+
+
+def _route_tray_click(item: TrayNotification, controller, checker) -> None:
+    if item.kind == "daily":
+        if item.snapshot is not None:
+            controller.show_daily_snapshot(item.snapshot)
+        else:
+            controller.show_daily_verse(item.reference)
+    elif item.kind == "update":
+        checker.download()
+
+
+def daily_notification_body(reference: str, translation: str) -> str:
+    ref = " ".join(str(reference or "").split())
+    name = " ".join(str(translation or "").split())[:64]
+    return "%s — %s is ready." % (ref, name or "your verse")
 
 
 def main(argv=None) -> int:
@@ -348,19 +423,71 @@ def _run(argv=None) -> int:
         tray.setContextMenu(menu)
         tray.setVisible(True)
 
+        notification_router = TrayNotificationRouter(controller, checker)
         ballooned = []
+
+        def _expire_notification(item: TrayNotification) -> None:
+            if notification_router.expire(item):
+                _show_next_notification()
+
+        def _show_next_notification() -> None:
+            item = notification_router.activate_next()
+            if item is None:
+                return
+            try:
+                if item.kind == "update":
+                    tray.showMessage(
+                        "Scripture update available",
+                        "Scripture %s is available. Click to update automatically." % item.update_tag,
+                        QSystemTrayIcon.MessageIcon.Information,
+                        8000,
+                    )
+                elif item.kind == "daily":
+                    if item.snapshot is None or not QSystemTrayIcon.supportsMessages():
+                        controller.cancel_daily_notification_attempt()
+                        _expire_notification(item)
+                        return
+                    tray.showMessage(
+                        "Scripture",
+                        daily_notification_body(item.reference, item.snapshot.translation_name),
+                        QSystemTrayIcon.MessageIcon.Information,
+                        8000,
+                    )
+                    controller.mark_daily_notification_delivered()
+                else:
+                    _expire_notification(item)
+                    return
+            except Exception:
+                if item.kind == "daily":
+                    controller.cancel_daily_notification_attempt()
+                _expire_notification(item)
+                return
+            QTimer.singleShot(9000, lambda item=item: _expire_notification(item))
+
         def _notify_update() -> None:
             if checker.updateAvailable and checker.updateTag not in ballooned:
                 ballooned.append(checker.updateTag)
-                tray.showMessage(
-                    "Scripture update available",
-                    "Scripture %s is available. Click to update automatically." % checker.updateTag,
-                    QSystemTrayIcon.MessageIcon.Information,
-                    8000,
-                )
+                notification_router.enqueue("update", update_tag=checker.updateTag)
+                _show_next_notification()
+
+        def _notify_daily(reference: str, translation: str) -> None:
+            snapshot = controller.daily_snapshot(reference)
+            if not reference or snapshot is None:
+                controller.cancel_daily_notification_attempt()
+                return
+            notification_router.enqueue("daily", reference=reference, snapshot=snapshot)
+            _show_next_notification()
+
+        def _message_clicked() -> None:
+            try:
+                notification_router.click()
+            finally:
+                _show_next_notification()
 
         checker.updateChanged.connect(_notify_update)
-        tray.messageClicked.connect(checker.download)
+        controller.dailyNotificationReady.connect(_notify_daily)
+        tray.messageClicked.connect(_message_clicked)
+        controller.start_daily_events()
 
     updates_on = not smoke and (
         getattr(sys, "frozen", False) or os.environ.get("SCRIPTURE_FORCE_UPDATE_CHECK") == "1"

@@ -13,7 +13,7 @@ ESV_COMMON_QUERY = (
     "include-headings=false"
     "&include-footnotes=false"
     "&include-verse-numbers=true"
-    "&include-copyright=true"
+    "&include-copyright=false"
     "&include-short-copyright=false"
     "&include-passage-references=false"
 )

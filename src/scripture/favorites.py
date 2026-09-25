@@ -6,8 +6,24 @@ import tempfile
 
 try:
     from . import references
+    from .secure_files import (
+        create_owner_only_directory,
+        descriptor_identity,
+        open_file_no_follow,
+        owner_only_handle_valid,
+        restrict_handle_owner_only,
+        secure_replace,
+    )
 except ImportError:
     import references
+    from secure_files import (
+        create_owner_only_directory,
+        descriptor_identity,
+        open_file_no_follow,
+        owner_only_handle_valid,
+        restrict_handle_owner_only,
+        secure_replace,
+    )
 
 MAX_ANCHOR_BYTES = 120
 MAX_ENTRIES = 200
@@ -29,19 +45,31 @@ class FavoritesStore:
 
     def ensure_dir(self) -> None:
         try:
-            os.makedirs(self._dir, exist_ok=True)
+            create_owner_only_directory(self._dir)
         except OSError as exc:
             raise FavoritesError("could not create favorites directory: %s" % exc) from exc
 
     def list(self) -> list:
+        self.ensure_dir()
+        fd = -1
         try:
-            with open(self._path, "rb") as fh:
+            fd = open_file_no_follow(self._path, os.O_RDONLY)
+            if not owner_only_handle_valid(fd):
+                raise FavoritesError("favorites file permissions are unsafe")
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > MAX_JSON_BYTES:
+                raise FavoritesError("favorites file is not a valid regular file")
+            with os.fdopen(fd, "rb", closefd=True) as fh:
+                fd = -1
                 raw = fh.read(MAX_JSON_BYTES + 1)
             data = raw.decode("utf-8")
         except FileNotFoundError:
             return []
         except (OSError, UnicodeError) as exc:
             raise FavoritesError("favorites file refused open: %s" % exc) from exc
+        finally:
+            if fd >= 0:
+                os.close(fd)
         if len(raw) > MAX_JSON_BYTES:
             raise FavoritesError("favorites list exceeds the %d-byte limit" % MAX_JSON_BYTES)
         try:
@@ -116,31 +144,32 @@ class FavoritesStore:
             raise FavoritesError("favorites list exceeds the %d-byte limit" % MAX_JSON_BYTES)
         tmp_name = ""
         tmp_fh = None
+        fd = -1
         try:
             fd, tmp_name = tempfile.mkstemp(prefix=".favorites.", suffix=".tmp", dir=self._dir)
             if hasattr(os, "fchmod"):
                 os.fchmod(fd, stat.S_IRUSR | stat.S_IWUSR)
+            restrict_handle_owner_only(fd)
+            identity = descriptor_identity(fd)
             tmp_fh = os.fdopen(fd, "wb", closefd=True)
+            fd = -1
             tmp_fh.write(payload)
             tmp_fh.flush()
             os.fsync(tmp_fh.fileno())
             tmp_fh.close()
             tmp_fh = None
-            with open(tmp_name, "rb") as check:
-                st = os.fstat(check.fileno())
-                if not stat.S_ISREG(st.st_mode) or st.st_size != len(payload):
-                    raise FavoritesError("temporary favorites file verification failed")
-                check.seek(0)
-                if check.read(len(payload)) != payload:
-                    raise FavoritesError("temporary favorites file verification failed")
-            os.replace(tmp_name, self._path)
+            secure_replace(tmp_name, self._path, identity, self._dir)
             tmp_name = ""
-            self._fsync_directory()
         except (OSError, FavoritesError) as exc:
             if isinstance(exc, FavoritesError):
                 raise
             raise FavoritesError("favorites file write failed: %s" % exc) from exc
         finally:
+            if fd >= 0:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
             if tmp_fh is not None:
                 try:
                     tmp_fh.close()
@@ -151,22 +180,6 @@ class FavoritesStore:
                     os.unlink(tmp_name)
                 except OSError:
                     pass
-
-    def _fsync_directory(self) -> None:
-        if os.name == "nt":
-            return
-        flags = getattr(os, "O_DIRECTORY", 0) | os.O_RDONLY
-        try:
-            fd = os.open(self._dir, flags)
-        except OSError:
-            return
-        try:
-            os.fsync(fd)
-        except OSError:
-            pass
-        finally:
-            os.close(fd)
-
 
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
