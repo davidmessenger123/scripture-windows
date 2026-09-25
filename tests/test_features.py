@@ -255,7 +255,8 @@ class SecurityPlatformTests(unittest.TestCase):
         self.assertNotIn("SecKeychainItemFreeContent", secrets_source)
         self.assertNotIn("CFRelease(data)", secrets_source)
         self.assertNotIn("/usr/bin/security", secrets_source)
-        self.assertNotIn("SECURITY_BINARY", secrets_source)
+        self.assertIn("advapi32, descriptor, local_free = _owner_only_descriptor()", secure_source)
+        self.assertNotIn("token, _sid, descriptor, local_free, close_handle = _owner_only_descriptor()", secure_source)
         calls = []
         sid_buffer = ctypes.create_string_buffer(8)
         allocated = []
@@ -305,6 +306,24 @@ class SecurityPlatformTests(unittest.TestCase):
         local_free(sid)
         local_free(sid_text)
         close_handle(token)
+        descriptor = ctypes.c_void_p(0x1234)
+        dacl = ctypes.c_void_p(0x5678)
+        fake_advapi = type("FakeAdvapi", (), {})()
+        def get_dacl(descriptor_pointer, present, dacl_pointer, defaulted):
+            present._obj.value = 1
+            dacl_pointer._obj.value = dacl.value
+            return 1
+        fake_advapi.GetSecurityDescriptorDacl = Function(get_dacl)
+        fake_advapi.SetSecurityInfo = Function(lambda *args: calls.append(("set_security_info", args)) or 0)
+        free_descriptor = mock.Mock()
+        with mock.patch.object(
+            secure_files_module,
+            "_owner_only_descriptor",
+            return_value=(fake_advapi, descriptor, free_descriptor),
+        ):
+            secure_files_module._restrict_handle_windows(99)
+        free_descriptor.assert_called_once_with(descriptor)
+        self.assertTrue(any(call[0] == "set_security_info" for call in calls if isinstance(call, tuple)))
     def test_taxonomy_uses_only_the_curated_deck(self):
         self.assertEqual(len(references.SCRIPTURE), 185)
         self.assertEqual(len(set(references.SCRIPTURE)), 185)

@@ -319,7 +319,7 @@ def _windows_security_info(handle: int, named_path: str = ""):
 
 
 def _restrict_handle_windows(handle: int) -> None:
-    advapi32, _kernel32, token, _sid, descriptor, local_free, close_handle = _owner_only_descriptor()
+    advapi32, descriptor, local_free = _owner_only_descriptor()
     try:
         get_dacl = advapi32.GetSecurityDescriptorDacl
         get_dacl.argtypes = [
@@ -359,8 +359,6 @@ def _restrict_handle_windows(handle: int) -> None:
     finally:
         if descriptor:
             local_free(descriptor)
-        if token.value:
-            close_handle(token)
 
 
 def restrict_handle_owner_only(handle: int) -> None:
