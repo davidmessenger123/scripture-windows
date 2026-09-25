@@ -29,6 +29,10 @@ _FILE_ATTRIBUTE_REPARSE_POINT = 0x00000400
 _FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
 _FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
 _SE_FILE_OBJECT = 1
+_SE_DACL_PROTECTED = 0x00001000
+_ACCESS_ALLOWED_ACE_TYPE = 0x0000
+_FILE_ALL_ACCESS = 0x001F01FF
+_ACL_SIZE_INFORMATION_CLASS = 2
 _INVALID_HANDLE_VALUE = wintypes.HANDLE(-1).value
 
 
@@ -48,6 +52,24 @@ class BY_HANDLE_FILE_INFORMATION_STRUCT(ctypes.Structure):
         ("nNumberOfLinks", wintypes.DWORD),
         ("nFileIndexHigh", wintypes.DWORD),
         ("nFileIndexLow", wintypes.DWORD),
+    ]
+
+
+class ACL_SIZE_INFORMATION_STRUCT(ctypes.Structure):
+    _fields_ = [
+        ("AceCount", wintypes.DWORD),
+        ("AclBytesInUse", wintypes.DWORD),
+        ("AclBytesFree", wintypes.DWORD),
+    ]
+
+
+class ACCESS_ALLOWED_ACE_STRUCT(ctypes.Structure):
+    _fields_ = [
+        ("AceType", ctypes.c_ubyte),
+        ("AceFlags", ctypes.c_ubyte),
+        ("AceSize", wintypes.WORD),
+        ("Mask", wintypes.DWORD),
+        ("SidStart", ctypes.c_size_t),
     ]
 
 
@@ -174,60 +196,65 @@ def _owner_only_descriptor():
             close_handle(token)
 
 
-def _descriptor_owner_only_valid(descriptor, owner, dacl, local_free) -> bool:
-    if not descriptor or not owner or not dacl or not local_free:
+def _descriptor_owner_only_valid(descriptor, owner, dacl, expected_sid) -> bool:
+    if not descriptor or not owner or not dacl or not expected_sid:
         return False
     advapi32 = windows_system_library("advapi32.dll")
-    convert_sid = advapi32.ConvertSidToStringSidW
-    convert_sid.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.LPWSTR)]
-    convert_sid.restype = wintypes.BOOL
-    convert_descriptor = advapi32.ConvertSecurityDescriptorToStringSecurityDescriptorW
-    convert_descriptor.argtypes = [
+    get_owner = advapi32.GetSecurityDescriptorOwner
+    get_owner.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(wintypes.BOOL)]
+    get_owner.restype = wintypes.BOOL
+    get_dacl = advapi32.GetSecurityDescriptorDacl
+    get_dacl.argtypes = [
         ctypes.c_void_p,
-        wintypes.DWORD,
-        wintypes.DWORD,
-        ctypes.POINTER(wintypes.LPWSTR),
-        ctypes.POINTER(wintypes.DWORD),
+        ctypes.POINTER(wintypes.BOOL),
+        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(wintypes.BOOL),
     ]
-    convert_descriptor.restype = wintypes.BOOL
-    owner_string = wintypes.LPWSTR()
-    dacl_string = wintypes.LPWSTR()
-    string_length = wintypes.DWORD()
-    try:
-        if not convert_sid(owner, ctypes.byref(owner_string)):
-            return False
-        if not convert_descriptor(
-            descriptor,
-            _DACL_SECURITY_INFORMATION,
-            _SDDL_REVISION_1,
-            ctypes.byref(dacl_string),
-            ctypes.byref(string_length),
-        ):
-            return False
-        value = str(dacl_string.value or "")
-        if not value.startswith("D:P"):
-            return False
-        remainder = value[3:]
-        if remainder.startswith("AI"):
-            remainder = remainder[2:]
-        if not remainder.startswith("(") or not remainder.endswith(")"):
-            return False
-        ace_text = remainder[1:-1]
-        if "(" in ace_text or ")" in ace_text:
-            return False
-        fields = ace_text.split(";")
-        if len(fields) != 6:
-            return False
-        ace_type, ace_flags, access_mask, object_flags, inherited_flags, trustee = fields
-        if ace_type != "A" or ace_flags or access_mask.upper() != "FA" or object_flags or inherited_flags:
-            return False
-        owner_sid = str(owner_string.value or "").casefold()
-        return bool(owner_sid and trustee.casefold() == owner_sid)
-    finally:
-        if owner_string:
-            local_free(owner_string)
-        if dacl_string:
-            local_free(dacl_string)
+    get_dacl.restype = wintypes.BOOL
+    get_control = advapi32.GetSecurityDescriptorControl
+    get_control.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.WORD), ctypes.POINTER(wintypes.DWORD)]
+    get_control.restype = wintypes.BOOL
+    get_acl_info = advapi32.GetAclInformation
+    get_acl_info.argtypes = [ctypes.c_void_p, ctypes.c_void_p, wintypes.DWORD, ctypes.c_int]
+    get_acl_info.restype = wintypes.BOOL
+    get_ace = advapi32.GetAce
+    get_ace.argtypes = [ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(ctypes.c_void_p)]
+    get_ace.restype = wintypes.BOOL
+    equal_sid = advapi32.EqualSid
+    equal_sid.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    equal_sid.restype = wintypes.BOOL
+    descriptor_owner = ctypes.c_void_p()
+    owner_defaulted = wintypes.BOOL()
+    if not get_owner(descriptor, ctypes.byref(descriptor_owner), ctypes.byref(owner_defaulted)):
+        return False
+    if not descriptor_owner or owner_defaulted.value or not equal_sid(descriptor_owner, expected_sid) or not equal_sid(owner, expected_sid):
+        return False
+    control = wintypes.WORD()
+    revision = wintypes.DWORD()
+    if not get_control(descriptor, ctypes.byref(control), ctypes.byref(revision)) or not control.value & _SE_DACL_PROTECTED:
+        return False
+    dacl_present = wintypes.BOOL()
+    dacl_defaulted = wintypes.BOOL()
+    dacl_pointer = ctypes.c_void_p()
+    if not get_dacl(descriptor, ctypes.byref(dacl_present), ctypes.byref(dacl_pointer), ctypes.byref(dacl_defaulted)):
+        return False
+    if not dacl_present.value or dacl_defaulted.value or not dacl_pointer:
+        return False
+    acl_size = ACL_SIZE_INFORMATION_STRUCT()
+    if not get_acl_info(
+        dacl_pointer,
+        ctypes.byref(acl_size),
+        ctypes.sizeof(acl_size),
+        _ACL_SIZE_INFORMATION_CLASS,
+    ) or acl_size.AceCount != 1:
+        return False
+    ace_pointer = ctypes.c_void_p()
+    if not get_ace(dacl_pointer, 0, ctypes.byref(ace_pointer)) or not ace_pointer:
+        return False
+    ace = ctypes.cast(ace_pointer, ctypes.POINTER(ACCESS_ALLOWED_ACE_STRUCT)).contents
+    if ace.AceType != _ACCESS_ALLOWED_ACE_TYPE or ace.AceFlags != 0 or ace.Mask != _FILE_ALL_ACCESS:
+        return False
+    return bool(equal_sid(ctypes.c_void_p(ace.SidStart), expected_sid))
 
 
 def _windows_handle_path(path: str):
@@ -412,7 +439,7 @@ def owner_only_handle_valid(handle: int) -> bool:
     try:
         current = _current_user_sid()
         _advapi32, _kernel32, token, sid, sid_text, local_free, close_handle = current
-        return status == 0 and _descriptor_owner_only_valid(descriptor, owner, dacl, local_free)
+        return status == 0 and _descriptor_owner_only_valid(descriptor, owner, dacl, sid)
     except (AttributeError, OSError, TypeError, ValueError, ctypes.ArgumentError):
         return False
     finally:

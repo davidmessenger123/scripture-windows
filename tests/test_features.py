@@ -132,50 +132,6 @@ class DeferredFetcher(QObject):
         })
 
 
-def _windows_security_diagnostic(path):
-    handle, _info, close_handle = secure_files_module._windows_handle_path(str(path))
-    owner_string = secure_files_module.wintypes.LPWSTR()
-    dacl_string = secure_files_module.wintypes.LPWSTR()
-    string_length = secure_files_module.wintypes.DWORD()
-    descriptor = ctypes.c_void_p()
-    descriptor_free = None
-    try:
-        status, owner, dacl, descriptor, descriptor_free = secure_files_module._windows_security_info(int(handle))
-        advapi32 = secure_files_module.windows_system_library("advapi32.dll")
-        convert_sid = advapi32.ConvertSidToStringSidW
-        convert_sid.argtypes = [ctypes.c_void_p, ctypes.POINTER(secure_files_module.wintypes.LPWSTR)]
-        convert_sid.restype = secure_files_module.wintypes.BOOL
-        convert_descriptor = advapi32.ConvertSecurityDescriptorToStringSecurityDescriptorW
-        convert_descriptor.argtypes = [
-            ctypes.c_void_p,
-            secure_files_module.wintypes.DWORD,
-            secure_files_module.wintypes.DWORD,
-            ctypes.POINTER(secure_files_module.wintypes.LPWSTR),
-            ctypes.POINTER(secure_files_module.wintypes.DWORD),
-        ]
-        convert_descriptor.restype = secure_files_module.wintypes.BOOL
-        if status != 0 or not convert_sid(owner, ctypes.byref(owner_string)):
-            raise AssertionError("Windows security diagnostic could not read owner SID")
-        if not convert_descriptor(
-            descriptor,
-            secure_files_module._DACL_SECURITY_INFORMATION,
-            secure_files_module._SDDL_REVISION_1,
-            ctypes.byref(dacl_string),
-            ctypes.byref(string_length),
-        ):
-            raise AssertionError("Windows security diagnostic could not read DACL SDDL")
-        return str(owner_string.value or ""), str(dacl_string.value or "")
-    finally:
-        if descriptor_free is not None:
-            if owner_string:
-                descriptor_free(owner_string)
-            if dacl_string:
-                descriptor_free(dacl_string)
-            if descriptor:
-                descriptor_free(descriptor)
-        close_handle(handle)
-
-
 class SecurityPlatformTests(unittest.TestCase):
     def test_macos_native_keychain_crud_uses_security_framework_boundary(self):
         state = {"item": False, "value": b"native-secret", "added": [], "modified": [], "deleted": False}
@@ -264,20 +220,9 @@ class SecurityPlatformTests(unittest.TestCase):
     def test_windows_real_private_directory_and_committed_file_dacl(self):
         with tempfile.TemporaryDirectory() as directory:
             private = Path(directory) / "private"
-            creation_error = None
-            try:
-                create_owner_only_directory(private)
-            except OSError as error:
-                creation_error = error
-            owner_sid, dacl_sddl = _windows_security_diagnostic(private)
-            print("WINDOWS_SECURITY_DIAGNOSTIC creation_error=%r owner_sid=%r dacl_sddl=%r" % (creation_error, owner_sid, dacl_sddl))
-            if creation_error is not None:
-                raise creation_error
-            committed = secure_files_module.secure_atomic_write_bytes(str(private / "card.bin"), b"card")
-            file_owner_sid, file_dacl_sddl = _windows_security_diagnostic(committed)
-            print("WINDOWS_SECURITY_DIAGNOSTIC path=%r owner_sid=%r dacl_sddl=%r" % (str(private), owner_sid, dacl_sddl))
-            print("WINDOWS_SECURITY_DIAGNOSTIC path=%r owner_sid=%r dacl_sddl=%r" % (str(committed), file_owner_sid, file_dacl_sddl))
+            create_owner_only_directory(private)
             self.assertTrue(owner_only_dacl_valid(private))
+            committed = secure_files_module.secure_atomic_write_bytes(str(private / "card.bin"), b"card")
             self.assertTrue(owner_only_dacl_valid(committed))
 
     def test_windows_library_loading_uses_system_directory(self):
@@ -294,11 +239,14 @@ class SecurityPlatformTests(unittest.TestCase):
         self.assertIn("_SE_FILE_OBJECT", secure_source)
         self.assertNotIn("SetKernelObjectSecurity", secure_source)
         self.assertNotIn("_SE_KERNEL_OBJECT", secure_source)
-        self.assertIn("ConvertSecurityDescriptorToStringSecurityDescriptorW", secure_source)
-        self.assertIn("D:P(A;;FA;;;%s)", secure_source)
-        self.assertIn("ConvertSidToStringSidW", secure_source)
-        self.assertNotIn("GetSecurityDescriptorControl", secure_source)
-        self.assertNotIn("GetAce", secure_source)
+        self.assertIn("GetSecurityDescriptorDacl", secure_source)
+        self.assertIn("GetAclInformation", secure_source)
+        self.assertIn("GetAce", secure_source)
+        self.assertIn("EqualSid", secure_source)
+        self.assertIn("ACCESS_ALLOWED_ACE_STRUCT", secure_source)
+        self.assertIn("ACL_SIZE_INFORMATION_STRUCT", secure_source)
+        self.assertIn("_SE_DACL_PROTECTED", secure_source)
+        self.assertNotIn("ConvertSecurityDescriptorToStringSecurityDescriptorW", secure_source)
         self.assertIn("PROTECTED_DACL_SECURITY_INFORMATION", secure_source)
         self.assertIn("FlushFileBuffers", secure_source)
         self.assertIn("secure_atomic_write_bytes", secure_source)
@@ -391,33 +339,76 @@ class SecurityPlatformTests(unittest.TestCase):
             secure_files_module._restrict_handle_windows(99)
         free_descriptor.assert_called_once_with(descriptor)
         self.assertTrue(any(call[0] == "set_security_info" for call in calls if isinstance(call, tuple)))
-        canonical = type("CanonicalAdvapi", (), {})()
-        canonical_dacl = ["D:P(A;;FA;;;S-1-5-21)"]
-        canonical.ConvertSidToStringSidW = Function(lambda sid, text: setattr(text._obj, "value", "S-1-5-21") or 1)
-        canonical.ConvertSecurityDescriptorToStringSecurityDescriptorW = Function(
-            lambda descriptor, info, revision, text, length: setattr(text._obj, "value", canonical_dacl[0]) or 1
+        structural = type("StructuralAdvapi", (), {})()
+        safe_sid_storage = ctypes.create_string_buffer(8)
+        wrong_sid_storage = ctypes.create_string_buffer(8)
+        current_sid = ctypes.c_void_p(ctypes.addressof(safe_sid_storage))
+        descriptor_owner = ctypes.c_void_p(ctypes.addressof(safe_sid_storage))
+        dacl_pointer = ctypes.c_void_p(200)
+        state = {
+            "count": 1,
+            "ace_type": 0,
+            "flags": 0,
+            "mask": secure_files_module._FILE_ALL_ACCESS,
+            "sid": ctypes.addressof(safe_sid_storage),
+        }
+        ace_storage = secure_files_module.ACCESS_ALLOWED_ACE_STRUCT()
+
+        def pointer_value(value):
+            return value.value if isinstance(value, ctypes.c_void_p) else int(value)
+
+        structural.GetSecurityDescriptorOwner = Function(
+            lambda descriptor, output, defaulted: setattr(output._obj, "value", descriptor_owner.value) or setattr(defaulted._obj, "value", 0) or 1
         )
-        canonical_free = mock.Mock()
-        variants = (
-            ("D:P(A;;FA;;;S-1-5-21)", True),
-            ("D:PAI(A;;FA;;;S-1-5-21)", True),
-            ("D:P(A;;FA;;;s-1-5-21)", True),
-            ("D:(A;;FA;;;S-1-5-21)", False),
-            ("D:P(D;;FA;;;S-1-5-21)", False),
-            ("D:P(A;CI;FA;;;S-1-5-21)", False),
-            ("D:P(A;;FA;;;S-1-5-22)", False),
-            ("D:P(A;;FA;;;S-1-5-21)(A;;FA;;;S-1-5-22)", False),
+        structural.GetSecurityDescriptorDacl = Function(
+            lambda descriptor, present, output, defaulted: setattr(present._obj, "value", 1)
+            or setattr(output._obj, "value", dacl_pointer.value)
+            or setattr(defaulted._obj, "value", 0)
+            or 1
         )
-        with mock.patch.object(secure_files_module, "windows_system_library", return_value=canonical):
-            for dacl, expected in variants:
-                canonical_dacl[0] = dacl
-                self.assertEqual(
-                    secure_files_module._descriptor_owner_only_valid(
-                        ctypes.c_void_p(1), ctypes.c_void_p(2), ctypes.c_void_p(3), canonical_free
-                    ),
-                    expected,
-                    dacl,
-                )
+        structural.GetSecurityDescriptorControl = Function(
+            lambda descriptor, control, revision: setattr(control._obj, "value", secure_files_module._SE_DACL_PROTECTED) or setattr(revision._obj, "value", 1) or 1
+        )
+        def acl_info(acl, buffer, length, info_class):
+            buffer._obj.AceCount = state["count"]
+            buffer._obj.AclBytesInUse = 12
+            buffer._obj.AclBytesFree = 0
+            return 1
+        structural.GetAclInformation = Function(acl_info)
+        def get_ace(acl, index, output):
+            if index != 0:
+                return 0
+            ace_storage.AceType = state["ace_type"]
+            ace_storage.AceFlags = state["flags"]
+            ace_storage.AceSize = ctypes.sizeof(ace_storage)
+            ace_storage.Mask = state["mask"]
+            ace_storage.SidStart = state["sid"]
+            output._obj.value = ctypes.addressof(ace_storage)
+            return 1
+        structural.GetAce = Function(get_ace)
+        structural.EqualSid = Function(lambda left, right: pointer_value(left) == pointer_value(right))
+        for name, changes, expected in (
+            ("one-safe", {}, True),
+            ("extra", {"count": 2}, False),
+            ("deny", {"ace_type": 1}, False),
+            ("wrong-SID", {"sid": ctypes.addressof(wrong_sid_storage)}, False),
+        ):
+            with self.subTest(name=name):
+                state.update({
+                    "count": 1,
+                    "ace_type": 0,
+                    "flags": 0,
+                    "mask": secure_files_module._FILE_ALL_ACCESS,
+                    "sid": ctypes.addressof(safe_sid_storage),
+                })
+                state.update(changes)
+                with mock.patch.object(secure_files_module, "windows_system_library", return_value=structural):
+                    self.assertEqual(
+                        secure_files_module._descriptor_owner_only_valid(
+                            ctypes.c_void_p(1), descriptor_owner, dacl_pointer, current_sid
+                        ),
+                        expected,
+                    )
     def test_taxonomy_uses_only_the_curated_deck(self):
         self.assertEqual(len(references.SCRIPTURE), 185)
         self.assertEqual(len(set(references.SCRIPTURE)), 185)
