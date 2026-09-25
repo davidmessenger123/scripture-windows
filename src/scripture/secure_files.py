@@ -196,8 +196,20 @@ def _owner_only_descriptor():
             close_handle(token)
 
 
-def _descriptor_owner_only_valid(descriptor, owner, dacl, expected_sid) -> bool:
-    if not descriptor or not owner or not dacl or not expected_sid:
+def _descriptor_owner_only_valid(descriptor, owner, dacl, expected_sid, trace=None) -> bool:
+    def check(name, value, detail=""):
+        passed = bool(value)
+        if trace is not None:
+            trace.append((name, passed, detail))
+        return passed
+
+    if not check("descriptor_present", descriptor):
+        return False
+    if not check("owner_present", owner):
+        return False
+    if not check("dacl_present", dacl):
+        return False
+    if not check("expected_sid_present", expected_sid):
         return False
     advapi32 = windows_system_library("advapi32.dll")
     get_owner = advapi32.GetSecurityDescriptorOwner
@@ -225,37 +237,57 @@ def _descriptor_owner_only_valid(descriptor, owner, dacl, expected_sid) -> bool:
     equal_sid.restype = wintypes.BOOL
     descriptor_owner = ctypes.c_void_p()
     owner_defaulted = wintypes.BOOL()
-    if not get_owner(descriptor, ctypes.byref(descriptor_owner), ctypes.byref(owner_defaulted)):
+    if not check("get_security_descriptor_owner", get_owner(descriptor, ctypes.byref(descriptor_owner), ctypes.byref(owner_defaulted))):
         return False
-    if not descriptor_owner or owner_defaulted.value:
+    if not check("descriptor_owner_present", descriptor_owner):
+        return False
+    if not check("descriptor_owner_not_defaulted", not owner_defaulted.value):
         return False
     control = wintypes.WORD()
     revision = wintypes.DWORD()
-    if not get_control(descriptor, ctypes.byref(control), ctypes.byref(revision)) or not control.value & _SE_DACL_PROTECTED:
+    if not check("get_security_descriptor_control", get_control(descriptor, ctypes.byref(control), ctypes.byref(revision))):
+        return False
+    if not check("dacl_protected", control.value & _SE_DACL_PROTECTED, "control=%d" % control.value):
         return False
     dacl_present = wintypes.BOOL()
     dacl_defaulted = wintypes.BOOL()
     dacl_pointer = ctypes.c_void_p()
-    if not get_dacl(descriptor, ctypes.byref(dacl_present), ctypes.byref(dacl_pointer), ctypes.byref(dacl_defaulted)):
+    if not check("get_security_descriptor_dacl", get_dacl(descriptor, ctypes.byref(dacl_present), ctypes.byref(dacl_pointer), ctypes.byref(dacl_defaulted))):
         return False
-    if not dacl_present.value or dacl_defaulted.value or not dacl_pointer:
+    if not check("dacl_is_present", dacl_present.value):
+        return False
+    if not check("dacl_not_defaulted", not dacl_defaulted.value):
+        return False
+    if not check("dacl_pointer_present", dacl_pointer):
         return False
     acl_size = ACL_SIZE_INFORMATION_STRUCT()
-    if not get_acl_info(
-        dacl_pointer,
-        ctypes.byref(acl_size),
-        ctypes.sizeof(acl_size),
-        _ACL_SIZE_INFORMATION_CLASS,
-    ) or acl_size.AceCount != 1:
+    if not check(
+        "get_acl_information",
+        get_acl_info(
+            dacl_pointer,
+            ctypes.byref(acl_size),
+            ctypes.sizeof(acl_size),
+            _ACL_SIZE_INFORMATION_CLASS,
+        ),
+    ):
+        return False
+    if not check("exactly_one_ace", acl_size.AceCount == 1, "count=%d" % acl_size.AceCount):
         return False
     ace_pointer = ctypes.c_void_p()
-    if not get_ace(dacl_pointer, 0, ctypes.byref(ace_pointer)) or not ace_pointer:
+    if not check("get_ace", get_ace(dacl_pointer, 0, ctypes.byref(ace_pointer))):
+        return False
+    if not check("ace_pointer_present", ace_pointer):
         return False
     ace = ctypes.cast(ace_pointer, ctypes.POINTER(ACCESS_ALLOWED_ACE_STRUCT)).contents
-    if ace.AceType != _ACCESS_ALLOWED_ACE_TYPE or ace.AceFlags != 0 or ace.Mask != _FILE_ALL_ACCESS:
+    if not check("ace_type_allowed", ace.AceType == _ACCESS_ALLOWED_ACE_TYPE, "type=%d" % ace.AceType):
+        return False
+    if not check("ace_flags_zero", ace.AceFlags == 0, "flags=%d" % ace.AceFlags):
+        return False
+    if not check("ace_full_access", ace.Mask == _FILE_ALL_ACCESS, "mask=0x%x" % ace.Mask):
         return False
     ace_sid = ctypes.cast(ctypes.byref(ace, ACCESS_ALLOWED_ACE_STRUCT.SidStart.offset), ctypes.c_void_p)
-    return bool(equal_sid(ace_sid, expected_sid))
+    return check("ace_sid_matches_expected", equal_sid(ace_sid, expected_sid))
+
 
 
 def _windows_handle_path(path: str):
