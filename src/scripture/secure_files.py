@@ -99,9 +99,15 @@ def _current_user_sid():
     convert_sid = advapi32.ConvertSidToStringSidW
     convert_sid.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.LPWSTR)]
     convert_sid.restype = wintypes.BOOL
+    get_length_sid = advapi32.GetLengthSid
+    get_length_sid.argtypes = [ctypes.c_void_p]
+    get_length_sid.restype = wintypes.DWORD
     copy_sid = advapi32.CopySid
-    copy_sid.argtypes = [wintypes.HANDLE, ctypes.c_void_p]
-    copy_sid.restype = ctypes.c_void_p
+    copy_sid.argtypes = [wintypes.DWORD, ctypes.c_void_p, ctypes.c_void_p]
+    copy_sid.restype = wintypes.BOOL
+    local_alloc = kernel32.LocalAlloc
+    local_alloc.argtypes = [ctypes.c_uint, ctypes.c_size_t]
+    local_alloc.restype = ctypes.c_void_p
     local_free = kernel32.LocalFree
     local_free.argtypes = [ctypes.c_void_p]
     local_free.restype = ctypes.c_void_p
@@ -126,21 +132,30 @@ def _current_user_sid():
         if not get_token_information(token, _TOKEN_USER, token_buffer, size, ctypes.byref(size)):
             raise ctypes.WinError(ctypes.get_last_error())
         user = ctypes.cast(token_buffer, ctypes.POINTER(TOKEN_USER_STRUCT)).contents
-        if not convert_sid(ctypes.cast(user.Sid, ctypes.c_void_p), ctypes.byref(sid_text)):
+        source_sid = ctypes.cast(user.Sid, ctypes.c_void_p)
+        sid_length = get_length_sid(source_sid)
+        if not sid_length:
             raise ctypes.WinError(ctypes.get_last_error())
-        sid_copy = copy_sid(None, user.Sid)
+        if not convert_sid(source_sid, ctypes.byref(sid_text)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        sid_copy = local_alloc(0x0040, sid_length)
         if not sid_copy:
+            raise ctypes.WinError(ctypes.get_last_error())
+        if not copy_sid(sid_length, sid_copy, source_sid):
             raise ctypes.WinError(ctypes.get_last_error())
         value = sid_copy
         sid_copy = ctypes.c_void_p()
         return advapi32, kernel32, token, value, sid_text, local_free, close_handle
     except Exception:
+        error = ctypes.get_last_error()
         if sid_copy:
             local_free(sid_copy)
         if sid_text:
             local_free(sid_text)
         if token.value:
             close_handle(token)
+        if error:
+            raise ctypes.WinError(error)
         raise
 
 
@@ -384,22 +399,25 @@ def owner_only_handle_valid(handle: int) -> bool:
         except OSError:
             return False
         return stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid() and not info.st_mode & 0o077
+    status, owner, dacl, descriptor, descriptor_free = _windows_security_info(int(handle))
+    current = None
     try:
-        status, owner, dacl, descriptor, local_free = _windows_security_info(int(handle))
-        advapi32, kernel32, token, sid, sid_text, local_free, close_handle = _current_user_sid()
-        try:
-            return status == 0 and _descriptor_owner_only_valid(descriptor, owner, dacl, sid)
-        finally:
+        current = _current_user_sid()
+        _advapi32, _kernel32, token, sid, sid_text, local_free, close_handle = current
+        return status == 0 and _descriptor_owner_only_valid(descriptor, owner, dacl, sid)
+    except (AttributeError, OSError, TypeError, ValueError, ctypes.ArgumentError):
+        return False
+    finally:
+        if current is not None:
+            _advapi32, _kernel32, token, sid, sid_text, local_free, close_handle = current
             if token.value:
                 close_handle(token)
-            if descriptor:
-                local_free(descriptor)
             if sid:
                 local_free(sid)
             if sid_text:
                 local_free(sid_text)
-    except (AttributeError, OSError, TypeError, ValueError, ctypes.ArgumentError):
-        return False
+        if descriptor:
+            descriptor_free(descriptor)
 
 
 def owner_only_dacl_valid(path: str) -> bool:

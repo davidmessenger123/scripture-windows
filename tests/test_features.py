@@ -16,6 +16,7 @@ from PySide6.QtGui import QGuiApplication, QImage
 
 from scripture import references
 from scripture import secrets as secrets_module
+from scripture import secure_files as secure_files_module
 from scripture.controller import (
     MAX_ANIMATION_SPEED,
     MAX_VERSE_FONT_PX,
@@ -221,6 +222,9 @@ class SecurityPlatformTests(unittest.TestCase):
         secrets_source = (root / "secrets.py").read_text(encoding="utf-8")
         updater_source = (root / "updater.py").read_text(encoding="utf-8")
         self.assertIn("GetSystemDirectoryW", secure_source)
+        self.assertIn("get_length_sid = advapi32.GetLengthSid", secure_source)
+        self.assertIn("copy_sid.argtypes = [wintypes.DWORD, ctypes.c_void_p, ctypes.c_void_p]", secure_source)
+        self.assertIn("local_alloc = kernel32.LocalAlloc", secure_source)
         self.assertIn("SetSecurityInfo", secure_source)
         self.assertIn("GetSecurityDescriptorDacl", secure_source)
         self.assertIn("_SE_FILE_OBJECT", secure_source)
@@ -252,9 +256,55 @@ class SecurityPlatformTests(unittest.TestCase):
         self.assertNotIn("CFRelease(data)", secrets_source)
         self.assertNotIn("/usr/bin/security", secrets_source)
         self.assertNotIn("SECURITY_BINARY", secrets_source)
+        calls = []
+        sid_buffer = ctypes.create_string_buffer(8)
+        allocated = []
 
+        class Function:
+            def __init__(self, callback):
+                self.callback = callback
+                self.argtypes = None
+                self.restype = None
 
-class ReferenceTests(unittest.TestCase):
+            def __call__(self, *args):
+                return self.callback(*args)
+
+        advapi = type("Advapi", (), {})()
+        kernel = type("Kernel", (), {})()
+        advapi.OpenProcessToken = Function(lambda process, access, token: setattr(token._obj, "value", 123) or 1)
+        def token_info(token, info_class, data, length, returned):
+            if data is None:
+                returned._obj.value = ctypes.sizeof(secure_files_module.TOKEN_USER_STRUCT)
+                return 0
+            user = ctypes.cast(data, ctypes.POINTER(secure_files_module.TOKEN_USER_STRUCT)).contents
+            user.Sid = ctypes.cast(sid_buffer, ctypes.POINTER(ctypes.c_ubyte))
+            user.Attributes = 0
+            return 1
+        advapi.GetTokenInformation = Function(token_info)
+        advapi.ConvertSidToStringSidW = Function(lambda sid, text: setattr(text._obj, "value", "S-1-5-21") or 1)
+        advapi.GetLengthSid = Function(lambda sid: 8)
+        def copy_sid(length, destination, source):
+            calls.append((length, destination, source))
+            return 1
+        advapi.CopySid = Function(copy_sid)
+        kernel.GetCurrentProcess = Function(lambda: 99)
+        def local_alloc(flags, size):
+            value = ctypes.create_string_buffer(size)
+            allocated.append(value)
+            return ctypes.cast(value, ctypes.c_void_p)
+        kernel.LocalAlloc = Function(local_alloc)
+        kernel.LocalFree = Function(lambda value: calls.append(("free", value)) or 0)
+        kernel.CloseHandle = Function(lambda value: calls.append(("close", value)) or 1)
+        with mock.patch.object(secure_files_module, "windows_system_library", side_effect=lambda name: advapi if "advapi" in name else kernel), mock.patch.object(
+            secure_files_module.ctypes, "get_last_error", return_value=122, create=True
+        ):
+            result = secure_files_module._current_user_sid()
+        self.assertEqual(calls[0][0], 8)
+        self.assertIs(advapi.CopySid.argtypes[0], secure_files_module.wintypes.DWORD)
+        _advapi, _kernel, token, sid, sid_text, local_free, close_handle = result
+        local_free(sid)
+        local_free(sid_text)
+        close_handle(token)
     def test_taxonomy_uses_only_the_curated_deck(self):
         self.assertEqual(len(references.SCRIPTURE), 185)
         self.assertEqual(len(set(references.SCRIPTURE)), 185)
