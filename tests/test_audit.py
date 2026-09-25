@@ -357,6 +357,17 @@ class PersistenceTests(unittest.TestCase):
             current.sync()
             store = SecretStore(directory)
             value, error = migrate_legacy_api_keys(current, legacy, store)
+            print(
+                "QSETTINGS_MIGRATION current_status=%r legacy_status=%r current_contains=%r legacy_contains=%r current_exists=%r legacy_exists=%r"
+                % (
+                    current.status(),
+                    legacy.status(),
+                    current.contains("apiKey"),
+                    legacy.contains("apiKey"),
+                    Path(current.fileName()).exists(),
+                    Path(legacy.fileName()).exists(),
+                )
+            )
             self.assertEqual(value, "legacy-key")
             self.assertEqual(error, "")
             self.assertFalse(current.contains("apiKey"))
