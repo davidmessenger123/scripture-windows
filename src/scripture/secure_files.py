@@ -196,20 +196,8 @@ def _owner_only_descriptor():
             close_handle(token)
 
 
-def _descriptor_owner_only_valid(descriptor, owner, dacl, expected_sid, trace=None) -> bool:
-    def check(name, value, detail=""):
-        passed = bool(value)
-        if trace is not None:
-            trace.append((name, passed, detail))
-        return passed
-
-    if not check("descriptor_present", descriptor):
-        return False
-    if not check("owner_present", owner):
-        return False
-    if not check("dacl_present", dacl):
-        return False
-    if not check("expected_sid_present", expected_sid):
+def _descriptor_owner_only_valid(descriptor, owner, dacl, expected_sid) -> bool:
+    if not descriptor or not owner or not dacl or not expected_sid:
         return False
     advapi32 = windows_system_library("advapi32.dll")
     get_owner = advapi32.GetSecurityDescriptorOwner
@@ -237,57 +225,37 @@ def _descriptor_owner_only_valid(descriptor, owner, dacl, expected_sid, trace=No
     equal_sid.restype = wintypes.BOOL
     descriptor_owner = ctypes.c_void_p()
     owner_defaulted = wintypes.BOOL()
-    if not check("get_security_descriptor_owner", get_owner(descriptor, ctypes.byref(descriptor_owner), ctypes.byref(owner_defaulted))):
+    if not get_owner(descriptor, ctypes.byref(descriptor_owner), ctypes.byref(owner_defaulted)):
         return False
-    if not check("descriptor_owner_present", descriptor_owner):
-        return False
-    if not check("descriptor_owner_not_defaulted", not owner_defaulted.value):
+    if not descriptor_owner or owner_defaulted.value:
         return False
     control = wintypes.WORD()
     revision = wintypes.DWORD()
-    if not check("get_security_descriptor_control", get_control(descriptor, ctypes.byref(control), ctypes.byref(revision))):
-        return False
-    if not check("dacl_protected", control.value & _SE_DACL_PROTECTED, "control=%d" % control.value):
+    if not get_control(descriptor, ctypes.byref(control), ctypes.byref(revision)) or not control.value & _SE_DACL_PROTECTED:
         return False
     dacl_present = wintypes.BOOL()
     dacl_defaulted = wintypes.BOOL()
     dacl_pointer = ctypes.c_void_p()
-    if not check("get_security_descriptor_dacl", get_dacl(descriptor, ctypes.byref(dacl_present), ctypes.byref(dacl_pointer), ctypes.byref(dacl_defaulted))):
+    if not get_dacl(descriptor, ctypes.byref(dacl_present), ctypes.byref(dacl_pointer), ctypes.byref(dacl_defaulted)):
         return False
-    if not check("dacl_is_present", dacl_present.value):
-        return False
-    if not check("dacl_not_defaulted", not dacl_defaulted.value):
-        return False
-    if not check("dacl_pointer_present", dacl_pointer):
+    if not dacl_present.value or dacl_defaulted.value or not dacl_pointer:
         return False
     acl_size = ACL_SIZE_INFORMATION_STRUCT()
-    if not check(
-        "get_acl_information",
-        get_acl_info(
-            dacl_pointer,
-            ctypes.byref(acl_size),
-            ctypes.sizeof(acl_size),
-            _ACL_SIZE_INFORMATION_CLASS,
-        ),
-    ):
-        return False
-    if not check("exactly_one_ace", acl_size.AceCount == 1, "count=%d" % acl_size.AceCount):
+    if not get_acl_info(
+        dacl_pointer,
+        ctypes.byref(acl_size),
+        ctypes.sizeof(acl_size),
+        _ACL_SIZE_INFORMATION_CLASS,
+    ) or acl_size.AceCount != 1:
         return False
     ace_pointer = ctypes.c_void_p()
-    if not check("get_ace", get_ace(dacl_pointer, 0, ctypes.byref(ace_pointer))):
-        return False
-    if not check("ace_pointer_present", ace_pointer):
+    if not get_ace(dacl_pointer, 0, ctypes.byref(ace_pointer)) or not ace_pointer:
         return False
     ace = ctypes.cast(ace_pointer, ctypes.POINTER(ACCESS_ALLOWED_ACE_STRUCT)).contents
-    if not check("ace_type_allowed", ace.AceType == _ACCESS_ALLOWED_ACE_TYPE, "type=%d" % ace.AceType):
-        return False
-    if not check("ace_flags_zero", ace.AceFlags == 0, "flags=%d" % ace.AceFlags):
-        return False
-    if not check("ace_full_access", ace.Mask == _FILE_ALL_ACCESS, "mask=0x%x" % ace.Mask):
+    if ace.AceType != _ACCESS_ALLOWED_ACE_TYPE or ace.AceFlags != 0 or ace.Mask != _FILE_ALL_ACCESS:
         return False
     ace_sid = ctypes.cast(ctypes.byref(ace, ACCESS_ALLOWED_ACE_STRUCT.SidStart.offset), ctypes.c_void_p)
-    return check("ace_sid_matches_expected", equal_sid(ace_sid, expected_sid))
-
+    return bool(equal_sid(ace_sid, expected_sid))
 
 
 def _windows_handle_path(path: str):
@@ -471,18 +439,8 @@ def restrict_owner_only(path: str, directory: bool = False) -> None:
         close_handle(handle)
 
 
-def owner_only_handle_valid(handle: int) -> bool:
-    if os.name != "nt":
-        try:
-            info = os.fstat(int(handle))
-        except OSError:
-            return False
-        return stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid() and not info.st_mode & 0o077
-    try:
-        native_handle = _windows_native_handle(handle)
-    except (AttributeError, OSError, TypeError, ValueError, ctypes.ArgumentError):
-        return False
-    status, owner, dacl, descriptor, descriptor_free = _windows_security_info(native_handle)
+def _owner_only_native_handle_valid(handle: int) -> bool:
+    status, owner, dacl, descriptor, descriptor_free = _windows_security_info(int(handle))
     current = None
     try:
         current = _current_user_sid()
@@ -503,6 +461,19 @@ def owner_only_handle_valid(handle: int) -> bool:
             descriptor_free(descriptor)
 
 
+def owner_only_handle_valid(handle: int) -> bool:
+    if os.name != "nt":
+        try:
+            info = os.fstat(int(handle))
+        except OSError:
+            return False
+        return stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid() and not info.st_mode & 0o077
+    try:
+        return _owner_only_native_handle_valid(_windows_native_handle(handle))
+    except (AttributeError, OSError, TypeError, ValueError, ctypes.ArgumentError):
+        return False
+
+
 def owner_only_dacl_valid(path: str) -> bool:
     target = _validated_path(path)
     if os.name != "nt":
@@ -518,7 +489,7 @@ def owner_only_dacl_valid(path: str) -> bool:
     try:
         handle, _info, close_handle = _windows_handle_path(target)
         try:
-            return owner_only_handle_valid(handle)
+            return _owner_only_native_handle_valid(handle)
         finally:
             close_handle(handle)
     except (AttributeError, OSError, TypeError, ValueError, ctypes.ArgumentError):
