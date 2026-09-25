@@ -28,6 +28,8 @@ _FILE_ATTRIBUTE_TEMPORARY = 0x00000100
 _FILE_ATTRIBUTE_REPARSE_POINT = 0x00000400
 _FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
 _FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
+_FILE_NAME_NORMALIZED = 0x00000000
+_VOLUME_NAME_DOS = 0x00000000
 _SE_FILE_OBJECT = 1
 _SE_DACL_PROTECTED = 0x00001000
 _ACCESS_ALLOWED_ACE_TYPE = 0x0000
@@ -410,12 +412,45 @@ def _windows_native_handle(handle: int) -> int:
     return int(native_handle)
 
 
+def _windows_acl_handle_for_fd(handle: int) -> tuple:
+    native_handle = _windows_native_handle(handle)
+    kernel32 = windows_system_library("kernel32.dll")
+    get_final_path = kernel32.GetFinalPathNameByHandleW
+    get_final_path.argtypes = [wintypes.HANDLE, wintypes.LPWSTR, wintypes.DWORD, wintypes.DWORD]
+    get_final_path.restype = wintypes.DWORD
+    required = get_final_path(
+        wintypes.HANDLE(native_handle),
+        None,
+        0,
+        _FILE_NAME_NORMALIZED | _VOLUME_NAME_DOS,
+    )
+    if not required or required > 32767:
+        raise ctypes.WinError(ctypes.get_last_error())
+    buffer = ctypes.create_unicode_buffer(required + 1)
+    written = get_final_path(
+        wintypes.HANDLE(native_handle),
+        buffer,
+        len(buffer),
+        _FILE_NAME_NORMALIZED | _VOLUME_NAME_DOS,
+    )
+    if not written or written >= len(buffer):
+        raise ctypes.WinError(ctypes.get_last_error())
+    acl_handle, _info, close_handle = _windows_handle_path(buffer.value)
+    return native_handle, acl_handle, close_handle
+
+
 def restrict_handle_owner_only(handle: int) -> None:
     if os.name != "nt":
         os.fchmod(int(handle), stat.S_IRUSR | stat.S_IWUSR)
         return
     try:
-        _restrict_handle_windows(_windows_native_handle(handle))
+        native_handle, acl_handle, close_handle = _windows_acl_handle_for_fd(handle)
+        try:
+            if windows_handle_identity(native_handle) != windows_handle_identity(acl_handle):
+                raise OSError("could not apply owner-only handle permissions")
+            _restrict_handle_windows(acl_handle)
+        finally:
+            close_handle(acl_handle)
     except (AttributeError, TypeError, ValueError, ctypes.ArgumentError) as exc:
         raise OSError("could not apply owner-only handle permissions") from exc
 
