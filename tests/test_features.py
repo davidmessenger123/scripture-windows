@@ -264,8 +264,15 @@ class SecurityPlatformTests(unittest.TestCase):
     def test_windows_real_private_directory_and_committed_file_dacl(self):
         with tempfile.TemporaryDirectory() as directory:
             private = Path(directory) / "private"
-            create_owner_only_directory(private)
+            creation_error = None
+            try:
+                create_owner_only_directory(private)
+            except OSError as error:
+                creation_error = error
             owner_sid, dacl_sddl = _windows_security_diagnostic(private)
+            print("WINDOWS_SECURITY_DIAGNOSTIC creation_error=%r owner_sid=%r dacl_sddl=%r" % (creation_error, owner_sid, dacl_sddl))
+            if creation_error is not None:
+                raise creation_error
             committed = secure_files_module.secure_atomic_write_bytes(str(private / "card.bin"), b"card")
             file_owner_sid, file_dacl_sddl = _windows_security_diagnostic(committed)
             print("WINDOWS_SECURITY_DIAGNOSTIC path=%r owner_sid=%r dacl_sddl=%r" % (str(private), owner_sid, dacl_sddl))
