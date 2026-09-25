@@ -243,10 +243,6 @@ def _descriptor_owner_only_valid(descriptor, owner, dacl, expected_sid, trace=No
         return False
     if not check("descriptor_owner_not_defaulted", not owner_defaulted.value):
         return False
-    if not check("descriptor_owner_matches_expected", equal_sid(descriptor_owner, expected_sid)):
-        return False
-    if not check("reported_owner_matches_expected", equal_sid(owner, expected_sid)):
-        return False
     control = wintypes.WORD()
     revision = wintypes.DWORD()
     if not check("get_security_descriptor_control", get_control(descriptor, ctypes.byref(control), ctypes.byref(revision))):

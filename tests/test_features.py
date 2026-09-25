@@ -391,6 +391,7 @@ class SecurityPlatformTests(unittest.TestCase):
         descriptor_owner = ctypes.c_void_p(ctypes.addressof(safe_sid_storage))
         dacl_pointer = ctypes.c_void_p(200)
         state = {
+            "descriptor_owner": ctypes.addressof(safe_sid_storage),
             "count": 1,
             "ace_type": 0,
             "flags": 0,
@@ -403,7 +404,7 @@ class SecurityPlatformTests(unittest.TestCase):
             return value.value if isinstance(value, ctypes.c_void_p) else int(value)
 
         structural.GetSecurityDescriptorOwner = Function(
-            lambda descriptor, output, defaulted: setattr(output._obj, "value", descriptor_owner.value) or setattr(defaulted._obj, "value", 0) or 1
+            lambda descriptor, output, defaulted: setattr(output._obj, "value", state["descriptor_owner"]) or setattr(defaulted._obj, "value", 0) or 1
         )
         structural.GetSecurityDescriptorDacl = Function(
             lambda descriptor, present, output, defaulted: setattr(present._obj, "value", 1)
@@ -434,12 +435,14 @@ class SecurityPlatformTests(unittest.TestCase):
         structural.EqualSid = Function(lambda left, right: pointer_value(left) == pointer_value(right))
         for name, changes, expected in (
             ("one-safe", {}, True),
+            ("owner-different", {"descriptor_owner": ctypes.addressof(wrong_sid_storage)}, True),
             ("extra", {"count": 2}, False),
             ("deny", {"ace_type": 1}, False),
             ("wrong-SID", {"sid": ctypes.addressof(wrong_sid_storage)}, False),
         ):
             with self.subTest(name=name):
                 state.update({
+                    "descriptor_owner": ctypes.addressof(safe_sid_storage),
                     "count": 1,
                     "ace_type": 0,
                     "flags": 0,
